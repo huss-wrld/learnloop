@@ -6,7 +6,7 @@ Hermes source references are to `v0.23.0` (`~/Projects/learnloop-ref/hermes-v0.2
 
 Status legend: **Mitigated** (workaround in place), **Planned** (workaround agreed, not built yet), **Open** (known, not handled), **Accepted** (by design).
 
-State as of 8 Nov 2026, before the `/learnloop:study` rebuild. Update the status when a planned fix lands.
+State as of 8 Nov 2026. Update the status when a planned fix lands.
 
 ---
 
@@ -56,17 +56,25 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 ---
 
-## KI-3. Plugin commands can't start a model turn (Planned)
+## KI-3. Plugin commands can't start a model turn (Mitigated)
 
 **What happens.** A plugin slash command returns text only (`hermes_cli/plugin_command_dispatch.py`). `/study <topic>` could create the lesson but the user had to send another message ("go") before anything happened. That also gave chats junk titles ("Go", "Bare greeting"), since Hermes titles from the first message.
 
-**Agreed fix (spike pending).** The lesson entry point becomes a **plugin-bundled skill**, `/learnloop:study <topic>`. Hermes turns plugin skills into slash commands that inject the skill text into the user's message and start a turn immediately (`agent/skill_commands.py:689-735`). The `pre_llm_call` hook detects the fixed invocation marker (`The user has invoked the "learnloop:study" skill`) in the *user* message and starts the lesson in code. The model still can't start a lesson by itself: loading the skill via `skill_view` produces a tool result, not a user message with the marker.
+**What we do now.** The lesson entry point is a **plugin-bundled skill**, `/learnloop:study <topic>` (`skills/study/SKILL.md`, generated from `method/` by `tools/build_skill.py`; a test fails if it's stale). Hermes turns plugin skills into slash commands that put the skill text into the user's message and start a turn immediately (`agent/skill_commands.py:689-735, 843-853`). The `pre_llm_call` hook looks for Hermes's fixed marker (`invoked the "learnloop:study" skill, indicating`) and, after it, the topic line (`The user has provided the following instruction alongside the skill invocation: …`), then starts the lesson in code. The model can't start a lesson by itself: loading the skill via `skill_view` gives a tool result, not a user message with the marker, and a user merely naming the skill doesn't match the marker either.
+
+**Spike (8 Nov, Desktop):** the turn started at once; the hook got the marker with `platform=desktop`; the topic came through; the chat was titled "Study how perceptrons learn". Verified again against Hermes's own `build_skill_invocation_message` for `/learnloop:study`.
+
+**Edge cases handled.** No topic (`/learnloop:study` alone): no lesson; the model asks for a topic. Invoked while a lesson is active: no restart; the model says to `/study stop` first or use a new chat. Hermes's `extract_user_instruction_from_skill_message` returns the *whole* message when no skill was invoked, so learnloop never uses it without the marker.
+
+**Limits.**
+- **Messaging platforms.** Hermes offers plugin skills as commands only on interactive surfaces (Desktop, TUI, CLI chat; `split_stacked_skill_commands`: "plugin skills are interactive-only"). On Telegram etc. `/study <topic>` still starts the lesson and the user sends a first message to begin. On interactive surfaces `/study <topic>` points to `/learnloop:study`.
+- **Single-query CLI** (`hermes chat -q "/learnloop:study …"`) answers "Unknown command": it isn't interactive.
+- **The skill is listed in every session's skills index** (one line). Hermes has no frontmatter flag to hide a skill from the model; the description says "User-invoked only".
+- **Coupled to two Hermes strings.** If a Hermes update rewords the marker or the topic line, lessons stop starting (no crash). `tests/test_core.py::skill_message` mirrors the strings; re-run the live check above after Hermes upgrades.
 
 **Rejected options.** Hermes's `inject_tui_message` / `inject_gateway_message` (`hermes_cli/plugins.py:1166-1200`) can start turns but are internal, not plugin API: catalog risk and liable to break on updates. A Desktop-only auto-submit would leave CLI and Telegram needing "go".
 
-**Pitfalls to watch.** The namespaced name is long. Hermes's marker text could change between versions: the detection must match loosely and be covered by a test against the real string from `skill_commands.py`.
-
-**Revisit when.** Hermes exposes a public "start turn" API for plugin commands, or the marker format changes.
+**Revisit when.** Hermes exposes a public "start turn" API for plugin commands, offers plugin skills on messaging platforms, or changes the marker format.
 
 ---
 

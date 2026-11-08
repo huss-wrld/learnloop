@@ -76,6 +76,9 @@ def _tool(fn, needs_cards=False):
 
 
 def register(ctx):
+    from pathlib import Path
+    ctx.register_skill("study", Path(__file__).parent / "skills" / "study" / "SKILL.md",
+                       description="User-invoked only: /learnloop:study <topic> starts a learnloop lesson.")
     handlers = {
         "learn_ask": _tool(core.tool_ask, needs_cards=True),
         "learn_grade": _tool(core.tool_grade),
@@ -118,8 +121,8 @@ def register(ctx):
     ctx.register_hook("transform_llm_output", transform_llm_output)
     ctx.register_hook("on_session_delete", on_session_delete)
 
-    def study_command(raw_args, session_id="", **_):
-        return core.command(get_store(), session_id or _session_id({}), raw_args)
+    def study_command(raw_args, session_id="", platform="", **_):
+        return core.command(get_store(), session_id or _session_id({}), raw_args, platform=platform or "")
 
     ctx.register_command("study", study_command,
                          description="Start or manage a learnloop lesson in this chat",

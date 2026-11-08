@@ -29,7 +29,8 @@ def test_no_learnharness_tool_names_leak():
 
 def test_command_name_is_not_a_builtin():
     # /learn is a Hermes built-in; plugin commands with built-in names are skipped silently.
-    assert '/study <topic>' in core.HELP and '/learn' not in core.HELP
+    import re
+    assert '/study <topic>' in core.HELP and not re.search(r'/learn\b', core.HELP)
 
 def test_learn_starts_lesson_and_says_go(store):
     out = core.command(store, "s1", "why attention divides by sqrt(d_k)")
@@ -207,3 +208,55 @@ def test_deleted_chat_ends_its_lesson(store):
     core.on_chat_deleted(store, "s1")
     assert store.active_lesson("s1") is None
     core.on_chat_deleted(store, "s1")  # no lesson: no error
+
+
+# ---- /learnloop:study entry (plugin skill; spike 8 Nov: starts the turn, marker + topic reach the hook) ----
+def skill_message(topic):
+    """Shape of Hermes's skill-invocation user message (agent/skill_commands.py, v0.23.0)."""
+    msg = ('[IMPORTANT: The user has invoked the "learnloop:study" skill, indicating they want you to follow '
+           "its instructions. The full skill content is loaded below.]\n\n---\nname: study\n---\nMETHOD")
+    if topic:
+        msg += f"\n\nThe user has provided the following instruction alongside the skill invocation: {topic}"
+    return msg
+
+
+def test_skill_invocation_starts_lesson(store):
+    ctx = core.turn_context(store, "s1", skill_message("how perceptrons learn."))
+    assert store.active_lesson("s1")["goal"] == "how perceptrons learn."
+    assert "lesson started" in ctx.lower() and "already in this message" in ctx
+
+
+def test_skill_without_topic_asks_for_one(store):
+    ctx = core.turn_context(store, "s1", skill_message(""))
+    assert store.active_lesson("s1") is None and "/learnloop:study <topic>" in ctx
+
+
+def test_skill_while_lesson_active_does_not_restart(store):
+    core.turn_context(store, "s1", skill_message("perceptrons"))
+    ctx = core.turn_context(store, "s1", skill_message("transformers"))
+    assert store.active_lesson("s1")["goal"] == "perceptrons" and "already has an active lesson" in ctx
+
+
+def test_plain_message_never_starts_lesson(store):
+    # Hermes's extractor returns the whole message when there is no skill: only the marker counts.
+    assert core.turn_context(store, "s1", "checkout the latest chat. it works") is None
+    assert core.turn_context(store, "s1", 'please load the "learnloop:study" skill') is None
+    assert store.active_lesson("s1") is None
+
+
+def test_study_command_points_interactive_users_to_skill(store):
+    out = core.command(store, "s1", "perceptrons", platform="desktop")
+    assert "/learnloop:study perceptrons" in out and store.active_lesson("s1") is None
+
+
+def test_study_command_still_starts_on_messaging_platforms(store):
+    # Plugin skills are interactive-only in Hermes, so Telegram etc. keep /study <topic> + a first message.
+    out = core.command(store, "s1", "perceptrons", platform="telegram")
+    assert store.active_lesson("s1") and "Send **go**" in out
+
+
+def test_skill_file_is_generated_from_method():
+    from pathlib import Path
+    skill = (Path(core.__file__).parent / "skills/study/SKILL.md").read_text(encoding="utf-8")
+    assert skill == core.study_skill_text(), "skills/study/SKILL.md is stale: run python3 tools/build_skill.py"
+    assert "name: study" in skill and "AGPL" in skill and core.method_text("probe") in skill
