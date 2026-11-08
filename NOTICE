@@ -1,0 +1,9 @@
+learnloop
+Copyright (C) 2026 Hussein Al-Amodi
+Licensed under the GNU Affero General Public License v3.0 only (see LICENSE).
+
+The teaching method files in method/ are adapted from LearnHarness
+(https://github.com/amosblomqvist/learnharness), Copyright (C) the LearnHarness
+authors, licensed under AGPL-3.0, at commit 713377f366771e3e4730e6acd1bc290e0ebc6d6e. Each adapted file begins
+with a comment naming its LearnHarness sources and the modifications made.
+All Python and JavaScript code in this repository is original to learnloop.
