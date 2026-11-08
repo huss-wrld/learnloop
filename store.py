@@ -513,12 +513,32 @@ class Store:
         return {"lessons": count("lessons"), "propositions": count("propositions"), "chains": count("chains")}
 
 
+def _parse_assessment_text(text: str) -> dict:
+    """'strand: assessment' per line (bullets allowed); a 'Summary:' line becomes the summary."""
+    strands, summary = [], ""
+    for line in text.splitlines():
+        line = line.strip().lstrip("-*• ").strip()
+        name, sep, body = line.partition(":")
+        if not sep:
+            continue
+        if name.strip().lower() == "summary":
+            summary = body.strip()
+        else:
+            strands.append({"strand": name.strip(), "assessment": body.strip()})
+    out = {"strands": strands}
+    if summary:
+        out["summary"] = summary
+    return out
+
+
 def _validate_assessment(assessment) -> dict:
+    if isinstance(assessment, str):
+        assessment = _parse_assessment_text(assessment)
     strands = (assessment or {}).get("strands") if isinstance(assessment, dict) else None
     if not strands or not isinstance(strands, list):
-        raise LearnError("Moving to teach requires `assessment`: {strands: [{strand, assessment}], summary}, "
-                         "one entry per dependency the lesson rests on (floor, ceiling, misconceptions, "
-                         "what to build from).")
+        raise LearnError("Moving to plan requires `assessment`: plain text, one 'strand: assessment' line per "
+                         "dependency the lesson rests on (floor, ceiling, misconceptions, what to build from), "
+                         "plus a 'Summary: ...' line.")
     out = []
     for s in strands:
         s = s or {}

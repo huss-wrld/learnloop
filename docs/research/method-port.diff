@@ -1,5 +1,5 @@
 --- docs/research/method-raw/shared.md	2026-11-08 17:23:49.550012673 +0100
-+++ /dev/fd/63	2026-11-08 17:25:04.567937227 +0100
++++ /dev/fd/63	2026-11-08 18:33:55.198224261 +0100
 @@ -29,13 +29,13 @@
  
  ## The question tools
@@ -65,7 +65,7 @@
 +4. Phase changes go through `learn_phase`, which returns the next phase's method. If the method for the current phase is no longer in the conversation, call `learn_method`.
 +5. learnloop tools may be loaded on demand: if one isn't directly callable, look it up and call it through the tool-loading tools.
 --- docs/research/method-raw/probe.md	2026-11-08 17:23:49.550199211 +0100
-+++ /dev/fd/63	2026-11-08 17:25:04.573937366 +0100
++++ /dev/fd/63	2026-11-08 18:33:55.202224354 +0100
 @@ -1,6 +1,6 @@
  # The agent
  
@@ -110,14 +110,14 @@
 +## 5. Conclude — `learn_phase(phase="plan", assessment=...)`
  
 -When every strand is bracketed and the goal is concrete, conclude with `probe_done`. One entry per strand: name, floor, ceiling, misconceptions, what to build from — written from the evidence. Exactly one call; refused while a question is open. A short closing sentence, end turn.
-+When every strand is bracketed and the goal is concrete, conclude with `learn_phase(phase="plan", assessment={"strands": [{"strand": ..., "assessment": ...}], "summary": ...})`. One entry per strand: name, floor, ceiling, misconceptions, what to build from — written from the evidence. Refused while a question is open. Its result carries the planning and teaching method: follow it and plan in the same turn.
++When every strand is bracketed and the goal is concrete, conclude with `learn_phase(phase="plan", assessment=...)`. The assessment is plain text: one `strand: assessment` line per strand (floor, ceiling, misconceptions, what to build from — written from the evidence), then a `Summary: ...` line. Keep it short and plain; detail belongs in your reply, not the tool argument. Refused while a question is open. Its result carries the planning and teaching method: follow it and plan in the same turn.
  
  ## Grounding — his material, not his description of it
  
 -If he references a local file, the `read` tool can inspect it directly; PDFs go through the `pdf` tool (cited brief); `research` sparingly — probing is measurement, not exploration.
 +If he references a local file, read it with your file tools; research sparingly — probing is measurement, not exploration.
 --- docs/research/method-raw/teach.md	2026-11-08 17:23:49.550453183 +0100
-+++ /dev/fd/63	2026-11-08 17:25:04.576937435 +0100
++++ /dev/fd/63	2026-11-08 18:33:55.205224425 +0100
 @@ -51,7 +51,7 @@
  
  This is the highest-leverage step; don't rush it. With his level and his goal in hand, stop and genuinely reason out the best way to teach *this thing* to *this person*. Re-read the method above and plan against it:

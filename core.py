@@ -75,11 +75,15 @@ def tool_ask(store: Store, session_id: str, args: dict, cards: bool) -> dict:
     q = store.ask(session_id, args.get("prompt"), options=args.get("options"), correct=args.get("correct"),
                   explanation=args.get("explanation", ""), expected=args.get("expected", ""),
                   qtype=args.get("type"), node_id=args.get("node_id"))
-    note = ("Card shown; the learner answers in it." if cards else
-            "Text mode: the learner answers in chat. Don't reveal the explanation or answer yet.")
+    if cards:
+        how = ("`show` renders as the question card. End your reply with it exactly once, as its own final "
+               "paragraph, then stop. The learner answers in the card.")
+    else:
+        how = ("`show` is the complete question, already formatted. End your reply with it exactly once; "
+               "don't write the question yourself, before or after it. Then stop. Don't reveal the "
+               "explanation or answer yet.")
     return {"question_id": q["id"], "show": question_show(q, cards),
-            "next": f"End your reply with `show` as its own final paragraph, then stop. {note} "
-                    "When the answer arrives, call learn_grade first."}
+            "next": how + " When the answer arrives, call learn_grade first."}
 
 
 def tool_grade(store: Store, session_id: str, args: dict) -> dict:
@@ -144,6 +148,29 @@ def tool_recall(store: Store, session_id: str, args: dict) -> dict:
         raise LearnError("learnloop recall is off outside lessons. The user can turn it on with /study recall on.")
     hits = store.search(args.get("query", ""), limit=min(int(args.get("limit") or RECALL_LIMIT), 20))
     return {"facts": [{"name": h["name"], "statement": h["statement"], "from": h["premises"]} for h in hits]}
+
+
+# ---------- reply clean-up (transform_llm_output) ----------
+def dedupe_reply(store: Store, session_id: str, reply: str) -> str | None:
+    """Weaker models paste the question and then `show` too (dogfood #1: 4 of 10 questions doubled).
+    If the open question's `show` appears more than once, keep only the last copy. None = no change."""
+    les = store.active_lesson(session_id)
+    q = store.open_question(les["id"]) if les else None
+    if not q or not reply:
+        return None
+    for show in (question_show(q, cards=False), question_show(q, cards=True)):
+        if reply.count(show) > 1:
+            head, _, tail = reply.rpartition(show)
+            head = head.replace(show, "")
+            head = "\n\n".join(part for part in head.split("\n\n") if part.strip())
+            return (head + "\n\n" if head else "") + show + tail
+    return None
+
+
+def on_chat_deleted(store: Store, session_id: str) -> None:
+    """A deleted chat can't continue its lesson; end it so it doesn't stay open forever."""
+    if store.active_lesson(session_id):
+        store.stop_lesson(session_id)
 
 
 # ---------- per-turn hook ----------
@@ -298,13 +325,13 @@ def schemas() -> list[dict]:
              "dont_know": {"type": "boolean"}, "confidence": {"type": "integer", "description": "0-100 %"},
              "thinking": {"type": s}, "reading_thinking": {"type": s}}}},
         {"name": "learn_phase", "description":
-            "learnloop lesson only: move phase probe→plan→teach→done, or store/revise the plan. plan needs "
-            "assessment; the plan is a Mermaid 'graph TD' of slug[title] nodes and a --> b edges. Returns the "
+            "learnloop lesson only: move phase probe→plan→teach→done, or store/revise the plan. Moving to plan "
+            "needs assessment; the plan is a Mermaid 'graph TD' of slug[title] nodes and a --> b edges. Returns the "
             "phase's method: follow it.",
          "parameters": {"type": obj, "required": ["phase"], "properties": {
              "phase": {"type": s, "enum": ["plan", "teach", "done"]}, "plan": {"type": s},
-             "assessment": {"type": obj, "properties": {"summary": {"type": s}, "strands": {"type": arr, "items": {
-                 "type": obj, "properties": {"strand": {"type": s}, "assessment": {"type": s}}}}}}}}},
+             "assessment": {"type": s, "description": "Plain text: one 'strand: assessment' line per strand, "
+                                                       "then 'Summary: ...'"}}}},
         {"name": "learn_method", "description":
             "learnloop lesson only: reload the full teaching method for the current phase (at lesson start, "
             "or when it's no longer in the conversation).",

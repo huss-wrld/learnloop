@@ -164,3 +164,46 @@ def test_import_skips_the_cycle(store, tmp_path):
 def test_import_real_learnharness_graph(store):
     out = core.command(store, "s1", f"import {LH_DATA}")
     assert "Imported from LearnHarness" in out and store.stats()["propositions"] > 0
+
+
+# ---- fixes from dogfood #1 (8 Nov): "Bare greeting" and "Go" chats ----
+def test_text_mode_tells_model_not_to_restate(store):
+    core.command(store, "s1", "attention maths")
+    out = core.tool_ask(store, "s1", {"prompt": "What does a dot product return?", "expected": "A number."},
+                        cards=False)
+    assert "exactly once" in out["next"] and "don't write the question yourself" in out["next"]
+
+
+def test_doubled_question_is_collapsed(store):
+    core.command(store, "s1", "attention maths")
+    show = core.tool_ask(store, "s1", {"prompt": "What does a dot product return?", "expected": "A number."},
+                         cards=False)["show"]
+    reply = f"Lead-in.\n\n{show}\n\n{show}"
+    assert core.dedupe_reply(store, "s1", reply) == f"Lead-in.\n\n{show}"
+    assert core.dedupe_reply(store, "s1", f"Lead-in.\n\n{show}") is None      # nothing to fix
+    assert core.dedupe_reply(store, "s2", reply) is None                         # other chats untouched
+
+
+def test_doubled_card_directive_is_collapsed(store):
+    core.command(store, "s1", "attention maths")
+    show = core.tool_ask(store, "s1", {"prompt": "What does a dot product return?", "expected": "A number."},
+                         cards=True)["show"]
+    assert core.dedupe_reply(store, "s1", f"{show}\n\n{show}") == show
+
+
+def test_assessment_as_plain_text(store):
+    # Nested JSON with LaTeX broke the tool-search bridge 3 times; plain text is the easy path.
+    core.command(store, "s1", "attention maths")
+    out = core.tool_phase(store, "s1", {"phase": "plan", "assessment":
+        "Dot product: computes it; no geometry yet.\n- Variance: thinks Var(X+Y)=1 for independent X, Y.\n"
+        "Summary: enter from the variance rule."}, cards=False)
+    les = store.active_lesson("s1")
+    assert out["phase"] == "plan" and '"strand": "Variance"' in les["assessment"]
+    assert '"summary": "enter from the variance rule."' in les["assessment"]
+
+
+def test_deleted_chat_ends_its_lesson(store):
+    core.command(store, "s1", "attention maths")
+    core.on_chat_deleted(store, "s1")
+    assert store.active_lesson("s1") is None
+    core.on_chat_deleted(store, "s1")  # no lesson: no error

@@ -102,6 +102,22 @@ def register(ctx):
 
     ctx.register_hook("pre_llm_call", pre_llm_call)
 
+    def transform_llm_output(response_text="", session_id="", **_):
+        try:
+            return core.dedupe_reply(get_store(), session_id, response_text)
+        except Exception as exc:  # noqa: BLE001 - never break a reply
+            log.warning("learnloop: reply clean-up failed: %s", exc)
+            return None
+
+    def on_session_delete(session_id="", **_):
+        try:
+            core.on_chat_deleted(get_store(), session_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("learnloop: ending a deleted chat's lesson failed: %s", exc)
+
+    ctx.register_hook("transform_llm_output", transform_llm_output)
+    ctx.register_hook("on_session_delete", on_session_delete)
+
     def study_command(raw_args, session_id="", **_):
         return core.command(get_store(), session_id or _session_id({}), raw_args)
 

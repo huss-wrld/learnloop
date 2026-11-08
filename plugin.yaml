@@ -5,4 +5,4 @@ author: Hussein Al-Amodi
 license: AGPL-3.0-only
 requires_hermes: ">=0.23.0"
 provides_tools: [learn_ask, learn_grade, learn_phase, learn_method, learn_record, learn_recall]
-provides_hooks: [pre_llm_call]
+provides_hooks: [pre_llm_call, transform_llm_output, on_session_delete]

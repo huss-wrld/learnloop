@@ -57,7 +57,7 @@ Every question should move an edge somewhere — no filler, no re-asking what hi
 
 ## 5. Conclude — `learn_phase(phase="plan", assessment=...)`
 
-When every strand is bracketed and the goal is concrete, conclude with `learn_phase(phase="plan", assessment={"strands": [{"strand": ..., "assessment": ...}], "summary": ...})`. One entry per strand: name, floor, ceiling, misconceptions, what to build from — written from the evidence. Refused while a question is open. Its result carries the planning and teaching method: follow it and plan in the same turn.
+When every strand is bracketed and the goal is concrete, conclude with `learn_phase(phase="plan", assessment=...)`. The assessment is plain text: one `strand: assessment` line per strand (floor, ceiling, misconceptions, what to build from — written from the evidence), then a `Summary: ...` line. Keep it short and plain; detail belongs in your reply, not the tool argument. Refused while a question is open. Its result carries the planning and teaching method: follow it and plan in the same turn.
 
 ## Grounding — his material, not his description of it
 
