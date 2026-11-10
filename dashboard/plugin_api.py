@@ -82,3 +82,30 @@ def submit(question_id: str, body: Submission):
                          reading_thinking=body.reading_thinking)
         return {"question": store.public_question(question_id), "line": pkg.core.card_answer_line(q)}
     return _call(run)
+
+
+
+class Thinking(BaseModel):
+    text: str = ""
+    hint: bool = False
+
+
+@router.get("/problem/{problem_id}")
+def get_problem(problem_id: str):
+    return _call(lambda pkg, store: store.public_problem(problem_id))
+
+
+@router.post("/problem/{problem_id}/thinking")
+def thinking(problem_id: str, body: Thinking):
+    def run(pkg, store):
+        p = store.add_thinking(problem_id, body.text, hint=body.hint)
+        return {"problem": store.public_problem(problem_id), "line": pkg.core.thinking_line(p, body.hint)}
+    return _call(run)
+
+
+@router.post("/problem/{problem_id}/dismiss")
+def dismiss(problem_id: str):
+    def run(pkg, store):
+        store.dismiss(problem_id)
+        return {"problem": store.public_problem(problem_id), "line": pkg.core.SET_ASIDE_LINE}
+    return _call(run)

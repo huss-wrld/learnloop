@@ -4,5 +4,5 @@ description: "Structured lessons inside Hermes: /learnloop <topic> probes what y
 author: Hussein Al-Amodi
 license: AGPL-3.0-only
 requires_hermes: ">=0.23.0"
-provides_tools: [learn_ask, learn_grade, learn_phase, learn_method, learn_record, learn_recall]
+provides_tools: [learn_ask, learn_grade, learn_phase, learn_method, learn_record, learn_recall, learn_problem, learn_conclude]
 provides_hooks: [pre_llm_call, pre_tool_call, transform_llm_output, on_session_delete]

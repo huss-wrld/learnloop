@@ -100,6 +100,8 @@ def register(ctx):
     from pathlib import Path
     ctx.register_skill("study", Path(__file__).parent / "skills" / "study" / "SKILL.md",
                        description="User-invoked only: /learnloop:study <topic> starts a learnloop lesson.")
+    ctx.register_skill("practice", Path(__file__).parent / "skills" / "practice" / "SKILL.md",
+                       description="User-invoked only: /learnloop:practice <topic> starts a practice session.")
     handlers = {
         "learn_ask": _tool(core.tool_ask, needs_cards=True),
         "learn_grade": _tool(core.tool_grade, needs_cards=True),
@@ -107,6 +109,8 @@ def register(ctx):
         "learn_method": _tool(core.tool_method),
         "learn_record": _tool(core.tool_record),
         "learn_recall": _tool(core.tool_recall),
+        "learn_problem": _tool(core.tool_problem, needs_cards=True),
+        "learn_conclude": _tool(core.tool_conclude, needs_cards=True),
     }
     for schema in core.schemas():
         ctx.register_tool(name=schema["name"], toolset=TOOLSET, schema=schema,

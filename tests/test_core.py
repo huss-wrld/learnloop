@@ -165,6 +165,8 @@ def test_import_skips_the_cycle(store, tmp_path):
 def test_import_real_learnharness_graph(store):
     out = core.command(store, "s1", f"import {LH_DATA}")
     assert "Imported from LearnHarness" in out and store.stats()["propositions"] > 0
+    labels = {p["group_label"] for p in store.graph()["propositions"]}
+    assert any(label.startswith("LearnHarness: ") for label in labels)
 
 
 # ---- fixes from dogfood #1 (8 Nov): "Bare greeting" and "Go" chats ----
@@ -334,3 +336,34 @@ def test_teach_miss_says_step_down_not_explain(teaching):
 def test_teach_reminder_carries_socratic_rules():
     text = core.reminder_text("teach")
     assert "Socratic" in text and "After a miss" in text and "never rush the repair".lower() in text.lower()
+
+
+# ---- stacked skill format (10 Nov: Desktop's Start button produced it and no lesson started) ----
+def stacked_message(skill, heading, topic):
+    msg = (f'[IMPORTANT: The user has invoked the "/{skill} /{skill}" stacked skill bundle, loading 1 skills '
+           "together. Treat every skill below as active guidance for this turn.]\n\n"
+           f"Skills loaded: {skill}")
+    if topic:
+        msg += f"\n\nUser instruction: {topic}"
+    return msg + f'\n\n[Loaded as part of the stacked skill invocation "{skill}".]\n\n---\nname: x\n---\n\n{heading}\n\nMETHOD'
+
+
+def test_stacked_format_starts_lesson(store):
+    msg = stacked_message("learnloop:study", core.STUDY_HEADING, "why attention divides by sqrt(d_k)")
+    assert core.skill_invocation(msg) == "why attention divides by sqrt(d_k)"
+    assert core.practice_invocation(msg) is None
+    core.turn_context(store, "s1", msg)
+    assert store.active_lesson("s1")["goal"] == "why attention divides by sqrt(d_k)"
+
+
+def test_stacked_format_without_topic(store):
+    assert core.skill_invocation(stacked_message("learnloop:study", core.STUDY_HEADING, "")) == ""
+
+
+def test_pasted_heading_alone_does_not_start(store):
+    assert core.skill_invocation(f"look at this:\n{core.STUDY_HEADING}\nUser instruction: x") is None
+
+
+def test_generated_skills_carry_their_headings():
+    assert core.STUDY_HEADING in core.study_skill_text()
+    assert core.PRACTICE_HEADING in core.practice_skill_text()

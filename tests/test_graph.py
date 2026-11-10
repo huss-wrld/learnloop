@@ -69,3 +69,37 @@ def test_graph_export(store):
     store.record("s1", [P("Alpha fact"), P("Beta fact")], [{"premises": ["Alpha fact"], "conclusion": "Beta fact"}])
     g = store.graph()
     assert len(g["propositions"]) == 2 and len(g["chains"]) == 1 and len(g["chains"][0]["premises"]) == 1
+
+
+# ---- graph view groups (11 Nov) ----
+def test_graph_groups_by_lesson_or_origin(store):
+    from learnloop import core
+    from .test_core import skill_message
+    core.turn_context(store, "s1", skill_message("attention maths"))
+    store.record("s1", [{"name": "Dot product scalar", "statement": "A dot product returns one number."}])
+    store.record("", [{"name": "Imported fact", "statement": "This one came from elsewhere.",
+                       "origin": "LearnHarness: Scaled dot-product attention"}], source="learnharness")
+    store.record("", [{"name": "Loose fact", "statement": "Recorded outside any lesson."}])
+    g = {p["name"]: p for p in store.graph()["propositions"]}
+    assert g["Dot product scalar"]["group_label"] == "attention maths" and g["Dot product scalar"]["session_id"] == "s1"
+    assert g["Imported fact"]["group"] == "origin:LearnHarness: Scaled dot-product attention"
+    assert g["Loose fact"]["group"] == "other"
+
+
+def test_reimport_fills_missing_origin(store):
+    store.record("", [{"name": "Imported fact", "statement": "This one came from elsewhere."}], source="learnharness")
+    store.record("", [{"name": "Imported fact", "statement": "This one came from elsewhere.", "origin": "LH: X"}],
+                 source="learnharness")
+    assert store.graph()["propositions"][0]["group_label"] == "LH: X"
+
+
+def test_old_database_gets_origin_column(tmp_path):
+    import sqlite3
+    from learnloop.store import Store
+    conn = sqlite3.connect(tmp_path / "old.db")
+    conn.execute("CREATE TABLE propositions(id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, "
+                 "statement TEXT NOT NULL, lesson_id TEXT, source TEXT NOT NULL DEFAULT 'learnloop', "
+                 "created_at TEXT NOT NULL)")
+    conn.commit()
+    Store(conn)
+    assert "origin" in {r[1] for r in conn.execute("PRAGMA table_info(propositions)")}

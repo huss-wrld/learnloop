@@ -63,3 +63,18 @@ def test_lesson_lessons_graph_routes(client, store):
     assert client.get("/api/plugins/learnloop/lesson?session=s1").json()["lesson"]["goal"] == "attention maths"
     assert client.get("/api/plugins/learnloop/lessons").json()["lessons"][0]["goal"] == "attention maths"
     assert client.get("/api/plugins/learnloop/graph").json() == {"propositions": [], "chains": []}
+
+
+def test_problem_routes(client, store):
+    store.start_practice("s1", "dot product variance", [])
+    p = store.pose("s1", "What is Var(q.k) for d_k = 64?", "recall", "Sum of 64 unit variances: 64.")
+    got = client.get(f"/api/plugins/learnloop/problem/{p['id']}").json()
+    assert got["statement"].startswith("What is") and "result" not in got
+    r = client.post(f"/api/plugins/learnloop/problem/{p['id']}/thinking", json={"text": "64?"}).json()
+    assert r["line"] == "Thinking: 64?" and len(r["problem"]["trace"]) == 1
+    r = client.post(f"/api/plugins/learnloop/problem/{p['id']}/dismiss").json()
+    assert r["problem"]["result"]["outcome"] == "dismissed" and r["line"] == "I set this problem aside."
+    assert client.post(f"/api/plugins/learnloop/problem/{p['id']}/dismiss").status_code == 400
+    view = client.get("/api/plugins/learnloop/lesson?session=s1").json()["lesson"]
+    assert view["phase"] == "practice" and view["practice"]["problems"][0]["label"] == "Set aside"
+    assert client.get("/api/plugins/learnloop/lessons").json()["lessons"][0]["kind"] == "practice"

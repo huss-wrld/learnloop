@@ -86,9 +86,10 @@ def test_replan_while_teaching(teaching):
         teaching.set_phase("s1", "teach")
 
 
-def test_no_practice_phase_in_v01(store):
+def test_a_lesson_cannot_turn_into_practice(store):
+    # practice is its own session (/learnloop:practice), never a phase a lesson moves into
     store.start_lesson("s1", "understand attention maths")
-    with pytest.raises(LearnError, match="phase must be one of"):
+    with pytest.raises(LearnError, match="Cannot move from probe to practice"):
         store.set_phase("s1", "practice")
 
 

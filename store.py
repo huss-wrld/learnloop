@@ -13,8 +13,14 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-PHASES = ("probe", "plan", "teach", "done")
-TRANSITIONS = {"probe": {"plan", "done"}, "plan": {"teach", "done"}, "teach": {"done"}, "done": set()}
+PHASES = ("probe", "plan", "teach", "practice", "done")
+TRANSITIONS = {"probe": {"plan", "done"}, "plan": {"teach", "done"}, "teach": {"done"}, "practice": {"done"},
+               "done": set()}
+# Practice (LearnHarness src/agent/tools/practice.ts): demand modes, outcomes, hint-ladder rungs, miss classes.
+MODES = ("recall", "discrimination", "composition")
+OUTCOMES = ("solved", "solvedWithHints", "movedOn", "surrendered")  # "dismissed" comes only from the learner
+RUNGS = ("R0", "R1", "R2", "R3", "R4", "R5")
+MISS_CLASSES = ("cue", "discrimination", "execution", "careless", "structural")
 VERDICTS = ("correct", "partial", "wrong")
 QTYPES = ("predict", "check")
 CONFIDENCE_STOPS = (0, 30, 50, 70, 90, 100)  # LearnHarness's slider stops
@@ -51,7 +57,20 @@ CREATE TABLE IF NOT EXISTS chain_premises(
   PRIMARY KEY(chain_id, premise));
 CREATE INDEX IF NOT EXISTS chain_premises_premise ON chain_premises(premise);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS problems(
+  id TEXT PRIMARY KEY, lesson_id TEXT NOT NULL REFERENCES lessons(id),
+  statement TEXT NOT NULL, mode TEXT NOT NULL, targets TEXT NOT NULL DEFAULT '[]', model_solution TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open', trace TEXT NOT NULL DEFAULT '[]',
+  outcome TEXT, verdict TEXT, rung TEXT, miss_class TEXT, retest INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, concluded_at TEXT);
+CREATE INDEX IF NOT EXISTS problems_lesson ON problems(lesson_id, status);
 """
+# Columns added after release: (table, column, declaration). Applied in place on open.
+MIGRATIONS = (
+    ("propositions", "origin", "TEXT"),                         # where an imported fact came from
+    ("lessons", "material", "TEXT NOT NULL DEFAULT '[]'"),       # practice: the picked proposition ids
+    ("lessons", "paused", "INTEGER NOT NULL DEFAULT 0"),         # practice: concluded, waiting for "next"
+)
 
 
 class LearnError(ValueError):
@@ -128,6 +147,9 @@ class Store:
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            for table, col, decl in MIGRATIONS:
+                if col not in {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             self.conn.commit()
 
     @contextmanager
@@ -212,6 +234,8 @@ class Store:
         les = self.require_lesson(session_id)
         with self._tx():
             self.conn.execute("UPDATE questions SET status='abandoned' WHERE lesson_id=? AND status='open'",
+                              (les["id"],))
+            self.conn.execute("UPDATE problems SET status='abandoned' WHERE lesson_id=? AND status='open'",
                               (les["id"],))
             self.conn.execute("UPDATE lessons SET phase='done', updated_at=? WHERE id=?", (_now(), les["id"]))
         return self.lesson(les["id"])
@@ -321,6 +345,8 @@ class Store:
         elif les["phase"] == "plan":
             raise LearnError("No graded questions while planning: present the plan, wait for the learner to "
                              "confirm it, then call learn_phase(phase='teach').")
+        elif les["phase"] == "practice":
+            raise LearnError("This chat is a practice session: pose problems with learn_problem, not questions.")
         else:
             raise LearnError("The lesson is finished.")
         opts = [str(o).strip() for o in (options or []) if str(o).strip()]
@@ -431,6 +457,187 @@ class Store:
             (lesson_id,))]
 
     # ---------- knowledge graph ----------
+
+    # ---------- practice (LearnHarness practice sessions: problem / conclude, then a pause) ----------
+    def start_practice(self, session_id: str, topic: str, material: list[str]) -> dict:
+        topic = (topic or "").strip()
+        if not session_id:
+            raise LearnError("No session id: practice can only start inside a chat.")
+        if len(topic) < 3:
+            raise LearnError("Say what to practise, e.g. /learnloop:practice softmax.")
+        with self._tx():
+            if self.active_lesson(session_id):
+                raise LearnError("This chat already has an active lesson. End it with /learnloop stop first.")
+            lesson_id, t = _new_id("l"), _now()
+            self.conn.execute("INSERT INTO lessons(id, session_id, goal, phase, material, created_at, updated_at) "
+                              "VALUES (?,?,?,?,?,?,?)",
+                              (lesson_id, session_id, topic, "practice", json.dumps(list(material)), t, t))
+        return self.lesson(lesson_id)
+
+    def neighbourhood(self, prop_ids: list[str], limit: int = 14) -> list[str]:
+        """The given facts, then their premises (two levels) and direct conclusions, up to `limit` ids:
+        practice needs the chains around a fact, not the fact alone."""
+        out = list(dict.fromkeys(prop_ids))
+        frontier = list(out)
+        for _ in range(2):
+            nxt = []
+            for pid in frontier:
+                nxt += [r[0] for r in self._all(
+                    "SELECT cp.premise FROM chains c JOIN chain_premises cp ON cp.chain_id = c.id "
+                    "WHERE c.conclusion=?", (pid,))]
+            frontier = [p for p in dict.fromkeys(nxt) if p not in out]
+            out += frontier
+        for pid in list(prop_ids):
+            out += [r[0] for r in self._all(
+                "SELECT c.conclusion FROM chains c JOIN chain_premises cp ON cp.chain_id = c.id "
+                "WHERE cp.premise=?", (pid,)) if r[0] not in out]
+        return list(dict.fromkeys(out))[:limit]
+
+    def material(self, lesson_id: str) -> dict:
+        ids = json.loads(self.lesson(lesson_id)["material"] or "[]")
+        props = [dict(r) for pid in ids for r in self._all("SELECT * FROM propositions WHERE id=?", (pid,))]
+        have = {p["id"] for p in props}
+        names = {p["id"]: p["name"] for p in props}
+        chains = []
+        for r in self._all("SELECT id, conclusion FROM chains ORDER BY created_at, rowid"):
+            if r["conclusion"] not in have:
+                continue
+            prem = [p[0] for p in self._all("SELECT premise FROM chain_premises WHERE chain_id=? ORDER BY rowid",
+                                            (r["id"],))]
+            if prem and all(p in have for p in prem):
+                chains.append({"premises": [names[p] for p in prem], "conclusion": names[r["conclusion"]]})
+        return {"propositions": props, "chains": chains}
+
+    @staticmethod
+    def _p(row) -> dict:
+        p = dict(row)
+        p["targets"] = json.loads(p["targets"] or "[]")
+        p["trace"] = json.loads(p["trace"] or "[]")
+        p["retest"] = bool(p["retest"])
+        return p
+
+    def problem(self, problem_id: str) -> dict:
+        row = self._one("SELECT * FROM problems WHERE id=?", (problem_id,))
+        if row is None:
+            raise LearnError(f"Unknown problem id {problem_id}.")
+        return self._p(row)
+
+    def open_problem(self, lesson_id: str) -> dict | None:
+        row = self._one("SELECT * FROM problems WHERE lesson_id=? AND status='open'", (lesson_id,))
+        return self._p(row) if row else None
+
+    def problems(self, lesson_id: str) -> list[dict]:
+        return [self._p(r) for r in self._all(
+            "SELECT * FROM problems WHERE lesson_id=? ORDER BY created_at, rowid", (lesson_id,))]
+
+    def _practice(self, session_id: str) -> dict:
+        les = self.require_lesson(session_id)
+        if les["phase"] != "practice":
+            raise LearnError("This chat's lesson isn't a practice session. The user starts one with "
+                             "/learnloop:practice <topic>.")
+        return les
+
+    def pose(self, session_id, statement, mode, model_solution, target=None) -> dict:
+        les = self._practice(session_id)
+        statement, model_solution = (statement or "").strip(), (model_solution or "").strip()
+        if len(statement) < 10:
+            raise LearnError("statement is empty or too short.")
+        if len(model_solution) < 10:
+            raise LearnError("modelSolution is required: solve the problem yourself, moves in order, before posing.")
+        if mode not in MODES:
+            raise LearnError(f"mode must be one of {', '.join(MODES)}.")
+        targets = []
+        for t in target or []:
+            t = str(t).strip()
+            pid = t if self._one("SELECT 1 FROM propositions WHERE id=?", (t,)) else self._prop_id(key_of(t))
+            if not pid:
+                raise LearnError(f"target {t!r} is not a known proposition: use ids or names from the material, "
+                                 "or omit target.")
+            targets.append(pid)
+        with self._tx():
+            open_p = self.open_problem(les["id"])
+            if open_p:
+                raise LearnError(f"Problem {open_p['id']} is still active: call learn_conclude on it before "
+                                 "posing the next one.")
+            if les["paused"]:
+                raise LearnError("Paused after the last problem: the next one comes only when the learner asks for "
+                                 "it. Answer his questions about the last problem and end your turn. If his latest "
+                                 "message does ask for the next problem, retry with go_ahead=true.")
+            pid, t = _new_id("x"), _now()
+            self.conn.execute("INSERT INTO problems(id, lesson_id, statement, mode, targets, model_solution, "
+                              "created_at) VALUES (?,?,?,?,?,?,?)",
+                              (pid, les["id"], statement, mode, json.dumps(targets), model_solution, t))
+            self.conn.execute("UPDATE lessons SET updated_at=? WHERE id=?", (t, les["id"]))
+        return self.problem(pid)
+
+    def add_thinking(self, problem_id: str, text: str, hint: bool = False) -> dict:
+        p = self.problem(problem_id)
+        if p["status"] != "open":
+            raise LearnError("This problem is already concluded.")
+        text = (text or "").strip()
+        if not text and not hint:
+            raise LearnError("Write some thinking first, or ask for a hint.")
+        trace = p["trace"] + [{"text": text[:4000], "hint": bool(hint), "at": _now()}]
+        with self._tx():
+            self.conn.execute("UPDATE problems SET trace=? WHERE id=? AND status='open'",
+                              (json.dumps(trace, ensure_ascii=False), problem_id))
+        return self.problem(problem_id)
+
+    def _close(self, p: dict, outcome, verdict, rung, miss_class, retest) -> dict:
+        with self._tx():
+            self.conn.execute("UPDATE problems SET status='concluded', outcome=?, verdict=?, rung=?, miss_class=?, "
+                              "retest=?, concluded_at=? WHERE id=? AND status='open'",
+                              (outcome, verdict, rung, miss_class, int(bool(retest)), _now(), p["id"]))
+            self.conn.execute("UPDATE lessons SET paused=1, updated_at=? WHERE id=?", (_now(), p["lesson_id"]))
+        return self.problem(p["id"])
+
+    def conclude(self, session_id, outcome, verdict, rung=None, miss_class=None, retest=False) -> dict:
+        les = self._practice(session_id)
+        p = self.open_problem(les["id"])
+        if p is None:
+            raise LearnError("No active problem to conclude: pose one first.")
+        if outcome not in OUTCOMES:
+            raise LearnError(f"outcome must be one of {', '.join(OUTCOMES)}.")
+        verdict = (verdict or "").strip()
+        if len(verdict) < 3:
+            raise LearnError("verdict is required: what was credited, and where it broke.")
+        rung = None if rung in (None, "", "none", "null") else rung
+        miss_class = None if miss_class in (None, "", "none", "null") else miss_class
+        if rung not in (None, *RUNGS):
+            raise LearnError(f"rung must be one of {', '.join(RUNGS)}, or null when no hint was given.")
+        if miss_class not in (None, *MISS_CLASSES):
+            raise LearnError(f"missClass must be one of {', '.join(MISS_CLASSES)}, or null when nothing was missed.")
+        return self._close(p, outcome, verdict, rung or None, miss_class or None, retest)
+
+    def dismiss(self, problem_id: str) -> dict:
+        """The learner set the problem aside: a full surrender, marked for a fresh-surface retest."""
+        p = self.problem(problem_id)
+        if p["status"] != "open":
+            raise LearnError("This problem is already concluded.")
+        return self._close(p, "dismissed", "Set aside by the learner.", None, None, True)
+
+    def resume(self, session_id: str) -> bool:
+        """End the pause: the learner asked for the next problem."""
+        les = self.active_lesson(session_id)
+        if not les or les["phase"] != "practice" or not les["paused"]:
+            return False
+        with self._tx():
+            self.conn.execute("UPDATE lessons SET paused=0 WHERE id=?", (les["id"],))
+        return True
+
+    def public_problem(self, problem_id: str) -> dict:
+        """What the card may show: the committed solution stays hidden until the problem is concluded."""
+        p = self.problem(problem_id)
+        les = self.lesson(p["lesson_id"])
+        latest = self._one("SELECT id FROM problems WHERE lesson_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                           (les["id"],))[0]
+        out = {k: p[k] for k in ("id", "statement", "mode", "status", "trace", "created_at")}
+        out.update(session_id=les["session_id"], latest=latest == p["id"],
+                   lesson_open=les["phase"] == "practice", paused=bool(les["paused"]))
+        if p["status"] == "concluded":
+            out["result"] = {k: p[k] for k in ("outcome", "verdict", "rung", "model_solution")}
+        return out
+
     def _prop_id(self, key: str) -> str | None:
         row = self._one("SELECT id FROM propositions WHERE key=?", (key,))
         return row[0] if row else None
@@ -479,16 +686,22 @@ class Store:
                 if len(name) < 3 or len(statement) < 10:
                     raise LearnError(f"Each proposition needs a short name and a full-sentence statement; got {p!r}.")
                 key = key_of(name)
+                origin = str(p.get("origin") or "").strip() or None
                 if self._prop_id(key):
                     reused.append(name)
+                    if origin:  # re-import fills in an origin an older import didn't store
+                        self.conn.execute("UPDATE propositions SET origin=? WHERE key=? AND origin IS NULL",
+                                          (origin, key))
                     continue
-                self.conn.execute("INSERT INTO propositions(id, key, name, statement, lesson_id, source, created_at) "
-                                  "VALUES (?,?,?,?,?,?,?)", (_new_id("p"), key, name, statement, lesson_id, source, _now()))
+                self.conn.execute("INSERT INTO propositions(id, key, name, statement, lesson_id, source, origin, "
+                                  "created_at) VALUES (?,?,?,?,?,?,?,?)",
+                                  (_new_id("p"), key, name, statement, lesson_id, source, origin, _now()))
                 added.append(name)
             for c in chains:
                 c = c or {}
                 conclusion = self._resolve(c.get("conclusion", ""))
-                premises = {self._resolve(x) for x in (c.get("premises") or [])}
+                ordered = list(dict.fromkeys(self._resolve(x) for x in (c.get("premises") or [])))
+                premises = set(ordered)
                 if not premises:
                     raise LearnError("Each chain needs at least one premise.")
                 if conclusion in premises or self._reaches(conclusion, premises):
@@ -506,7 +719,7 @@ class Store:
                 self.conn.execute("INSERT INTO chains(id, conclusion, lesson_id, created_at) VALUES (?,?,?,?)",
                                   (chain_id, conclusion, lesson_id, _now()))
                 self.conn.executemany("INSERT INTO chain_premises(chain_id, premise) VALUES (?,?)",
-                                      [(chain_id, pid) for pid in sorted(premises)])
+                                      [(chain_id, pid) for pid in ordered])  # the order given
                 added_chains += 1
         return {"added_propositions": added, "reused_propositions": reused, "added_chains": added_chains,
                 "duplicate_chains": dup, "skipped_circular": cyclic}
@@ -539,9 +752,20 @@ class Store:
             "SELECT * FROM propositions ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))]
 
     def graph(self) -> dict:
-        """Whole graph for the Desktop graph view."""
-        props = [{"id": r["id"], "name": r["name"], "statement": r["statement"], "source": r["source"]}
-                 for r in self._all("SELECT * FROM propositions ORDER BY created_at, rowid")]
+        """Whole graph for the Desktop graph view. Each fact's group is its lesson, or for imported facts
+        the chat they came from (LearnHarness draws its regions the same way)."""
+        props = []
+        for r in self._all("SELECT p.*, l.goal AS goal, l.session_id AS session_id FROM propositions p "
+                           "LEFT JOIN lessons l ON l.id = p.lesson_id ORDER BY p.created_at, p.rowid"):
+            if r["lesson_id"]:
+                group, label = r["lesson_id"], r["goal"] or "Lesson"
+            elif r["origin"]:
+                group, label = "origin:" + r["origin"], r["origin"]
+            else:
+                group, label = "other", "Imported" if r["source"] != "learnloop" else "Outside lessons"
+            props.append({"id": r["id"], "name": r["name"], "statement": r["statement"], "source": r["source"],
+                          "group": group, "group_label": label, "session_id": r["session_id"],
+                          "created_at": r["created_at"]})
         chains = []
         for r in self._all("SELECT id, conclusion FROM chains ORDER BY created_at, rowid"):
             chains.append({"id": r["id"], "conclusion": r["conclusion"], "premises": [
