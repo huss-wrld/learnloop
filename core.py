@@ -129,8 +129,7 @@ def question_show(q: dict, cards: bool) -> str:
 
 
 def map_show(store: Store, lesson_id: str, cards: bool) -> str:
-    if cards:
-        return f'::learnloop-map{{lesson="{lesson_id}"}}'
+    """The plan as a Mermaid block for the chat (Desktop renders it; the lesson pane shows it live)."""
     mermaid = store.plan_mermaid(lesson_id)
     return f"```mermaid\n{mermaid}\n```" if mermaid else ""
 
@@ -231,6 +230,42 @@ def tool_recall(store: Store, session_id: str, args: dict) -> dict:
         raise LearnError("learnloop recall is off outside lessons. The user can turn it on with /learnloop recall on.")
     hits = store.search(args.get("query", ""), limit=min(int(args.get("limit") or RECALL_LIMIT), 20))
     return {"facts": [{"name": h["name"], "statement": h["statement"], "from": h["premises"]} for h in hits]}
+
+
+# ---------- views for the Desktop pane and Learn page ----------
+def lesson_view(store: Store, session_id: str) -> dict:
+    les = store.latest_lesson(session_id)
+    if les is None:
+        return {"lesson": None}
+    answered = store.answers(les["id"])
+    open_q = store.open_question(les["id"])
+    view = {"id": les["id"], "goal": les["goal"], "phase": les["phase"], "session_id": les["session_id"],
+            "created_at": les["created_at"], "updated_at": les["updated_at"],
+            "answered": len(answered), "correct": sum(a["verdict"] == "correct" for a in answered),
+            "open_question": {"id": open_q["id"], "prompt": open_q["prompt"]} if open_q else None,
+            "assessment": json.loads(les["assessment"]) if les["assessment"] else None,
+            "facts": [{"name": p["name"], "statement": p["statement"]} for p in store.lesson_props(les["id"], 12)],
+            "plan": None}
+    if les["plan"]:
+        st = store.plan_status(les["id"])
+        done = set(st["visited"]) - {st["current"]}
+        view["plan"] = {"mermaid": store.plan_mermaid(les["id"]), "nodes": [
+            {"id": n, "title": t, "state": "current" if n == st["current"] else "done" if n in done else "todo"}
+            for n, t in st["nodes"].items()]}
+    return {"lesson": view}
+
+
+def lessons_overview(store: Store) -> dict:
+    out = []
+    for les in store.all_lessons():
+        answered = store.answers(les["id"])
+        nodes = store.plan_status(les["id"]) if les["plan"] else None
+        out.append({"id": les["id"], "goal": les["goal"], "phase": les["phase"], "session_id": les["session_id"],
+                    "created_at": les["created_at"], "updated_at": les["updated_at"], "answered": len(answered),
+                    "correct": sum(a["verdict"] == "correct" for a in answered),
+                    "steps": len(nodes["nodes"]) if nodes else 0, "reached": len(nodes["visited"]) if nodes else 0,
+                    "facts": len(store.lesson_props(les["id"], 10_000))})
+    return {"lessons": out, "stats": store.stats(), "recall": store.get_setting("recall", "off")}
 
 
 # ---------- reply clean-up (transform_llm_output) ----------

@@ -186,6 +186,24 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 **What happens.** Everything that is not enforced in code depends on the model following the method: one question per turn, teaching before checks, recording after a step lands. learnloop enforces what it can (phase order, one open question, answer keys, acyclic graph, plan required before teaching) but can't force good teaching.
 
-**Evidence.** deepseek-v4.1-flash followed the method well in dogfood #1 apart from KI-1 and KI-5. Other models are untested.
+**Evidence.** deepseek-v4.1-flash followed the method well in dogfood #1 apart from KI-1 and KI-5, but hand-typed 3 of 13 questions in run `r1-sqrtdk`. Claude Opus 5.5 (medium) in run `o1-opus`: 0 hand-typed of 14, 0 errors, and after a missed check it stepped down to a smaller question instead of explaining, as LearnHarness does.
 
 **Revisit when.** Testing other models (the hackathon judges may use any). Keep a small checklist of behaviours to score per model: probes before teaching, never answers its own question, grades first, records after landings.
+
+---
+
+## KI-14. One Desktop backend serves every profile (Fixed)
+
+**What happened.** The Learn page was empty in the test profile and tools said "No active lesson" in Desktop chats, while the hook had created the lesson. `get_store()` cached one database per process; Desktop's backend and multiplexed gateways serve several profiles from one process, scoping each request with a context-local Hermes home. The first profile to ask pinned every later read and write.
+
+**Fix.** `get_store()` keeps one Store per resolved Hermes home (`tests/test_profiles.py`).
+
+**Dev note.** Each profile runs its own plugin host (`hermes_cli.plugin_host_child`), owned by the gateway, so a Desktop restart doesn't reload plugin code. After code changes, stop the profile's plugin host process; Hermes restarts it and reloads plugins.
+
+---
+
+## KI-15. The lesson pane relies on an undocumented flag (Accepted)
+
+**What happens.** The lesson pane registers with `hideOnly: true`, so closing it hides it instead of disabling learnloop. Desktop's built-in tabs use the flag (`pane-shell/tree/store.ts:590`), but the plugin SDK docs don't mention it.
+
+**Revisit when.** A Desktop update drops or renames it: closing the pane would then disable the whole plugin.

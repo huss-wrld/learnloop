@@ -106,3 +106,10 @@ def test_hand_typed_question_is_caught_next_turn(store):
     ctx = core.turn_context(store, "s1", "B, 50%", last_reply=typed)
     assert "typed by hand" in ctx and "learn_ask" in ctx
     assert "typed by hand" not in (core.turn_context(store, "s1", "ok", last_reply="Plain explanation.") or "")
+
+
+def test_map_is_mermaid_even_with_cards(store):
+    core.turn_context(store, "s1", skill_message("attention maths"))
+    out = core.tool_phase(store, "s1", {"phase": "plan", "assessment": "Dot: holds it fine",
+                                        "plan": "graph TD\n  a[A] --> b[B]"}, cards=True)
+    assert out["map"].startswith("```mermaid") and "::learnloop-map" not in out["map"]

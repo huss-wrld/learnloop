@@ -16,19 +16,28 @@ log = logging.getLogger(__name__)
 NAME = "learnloop"
 TOOLSET = "learnloop"
 
-_store: Store | None = None
+_stores: dict[str, Store] = {}
 _store_lock = threading.Lock()
 _platforms: dict[str, str] = {}  # session_id -> platform seen by the hook (spike U3: tools see "local")
 
 
+def _hermes_home() -> str:
+    from hermes_constants import get_hermes_home
+    return str(get_hermes_home().resolve())
+
+
 def get_store() -> Store:
-    """One Store per process. plugin_db() is WAL + check_same_thread=False (spike U6)."""
-    global _store
+    """One Store per Hermes home (profile). plugin_db() is WAL + check_same_thread=False (spike U6).
+
+    Desktop's backend is one process serving every profile, scoping each request to its profile;
+    a single cached Store would pin whichever profile asked first.
+    """
+    home = _hermes_home()
     with _store_lock:
-        if _store is None:
+        if home not in _stores:
             from plugins.plugin_storage import plugin_db
-            _store = Store(plugin_db(NAME, "learnloop.db"))
-        return _store
+            _stores[home] = Store(plugin_db(NAME, "learnloop.db"))
+        return _stores[home]
 
 
 def _session_id(kwargs: dict) -> str:

@@ -170,6 +170,17 @@ class Store:
             raise LearnError(f"Unknown lesson id {lesson_id}.")
         return dict(row)
 
+    def latest_lesson(self, session_id: str) -> dict | None:
+        """The chat's most recent lesson, finished or not (the pane keeps showing a finished one)."""
+        if not session_id:
+            return None
+        row = self._one("SELECT * FROM lessons WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                        (session_id,))
+        return dict(row) if row else None
+
+    def all_lessons(self) -> list[dict]:
+        return [dict(r) for r in self._all("SELECT * FROM lessons ORDER BY created_at DESC, rowid DESC")]
+
     def active_lesson(self, session_id: str) -> dict | None:
         if not session_id:
             return None

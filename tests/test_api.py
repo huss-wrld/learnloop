@@ -55,3 +55,11 @@ def test_errors_are_400(client, store):
     assert client.get("/api/plugins/learnloop/question/q_nope").status_code == 400
     qid = ask(store)
     assert client.post(f"/api/plugins/learnloop/question/{qid}/submit", json={}).status_code == 400
+
+
+def test_lesson_lessons_graph_routes(client, store):
+    assert client.get("/api/plugins/learnloop/lesson?session=s1").json() == {"lesson": None}
+    ask(store)
+    assert client.get("/api/plugins/learnloop/lesson?session=s1").json()["lesson"]["goal"] == "attention maths"
+    assert client.get("/api/plugins/learnloop/lessons").json()["lessons"][0]["goal"] == "attention maths"
+    assert client.get("/api/plugins/learnloop/graph").json() == {"propositions": [], "chains": []}

@@ -196,6 +196,164 @@ function QuestionCard({ ctx, id, sessionId }) {
   ])
 }
 
+
+// ---------- shared ----------
+const PHASES = ['probe', 'plan', 'teach', 'done']
+const PHASE_LABEL = { probe: 'Probe', plan: 'Plan', teach: 'Teach', done: 'Done' }
+const STATE_MARK = { done: '✓', current: '●', todo: '○' }
+
+function usePoll(ctx, path, ms) {
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    if (!path) { setData(null); return undefined }
+    let live = true
+    const tick = () => ctx.rest(path).then(d => live && setData(d), () => {})
+    tick()
+    const t = setInterval(tick, ms)
+    return () => { live = false; clearInterval(t) }
+  }, [ctx, path, ms])
+  return data
+}
+
+// Store timestamps are ISO strings; sdk.relativeTime wants epoch ms (an ISO string made it throw).
+function when(iso) {
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return ''
+  try { return sdk.relativeTime ? sdk.relativeTime(ms) : new Date(ms).toLocaleDateString() } catch { return new Date(ms).toLocaleDateString() }
+}
+
+function startLesson(topic) {
+  const t = topic.trim()
+  if (!t) return
+  // A lesson belongs to its own chat: open a fresh one, then send the start command into it.
+  if (typeof sdk.host.newChat === 'function') sdk.host.newChat()
+  setTimeout(() => {
+    const sent = sdk.host.composer.submit(null, `/learnloop:study ${t}`)
+    if (!sent) sdk.host.notify({ kind: 'warning', message: `Type /learnloop:study ${t} in a chat to start.` })
+  }, 400)
+}
+
+function StartBox({ compact }) {
+  const [topic, setTopic] = useState('')
+  const Btn = sdk.Button || 'button'
+  const In = sdk.Input || 'input'
+  return jsxs('form', {
+    className: cn('flex gap-2', compact ? 'flex-col' : 'items-center'),
+    onSubmit: e => { e.preventDefault(); startLesson(topic); setTopic('') },
+    children: [
+      jsx(In, { value: topic, onChange: e => setTopic(e.target.value), placeholder: 'What do you want to understand?',
+        className: 'min-w-0 flex-1 text-sm' }),
+      jsx(Btn, { type: 'submit', disabled: !topic.trim(), children: 'Start a lesson' })
+    ]
+  })
+}
+
+function PhaseSteps({ phase }) {
+  const at = PHASES.indexOf(phase)
+  return jsx('div', { className: 'flex items-center gap-1 text-[0.7rem]', children: PHASES.map((p, i) => jsxs('span', {
+    className: cn('flex items-center gap-1', i === at ? 'font-semibold text-(--ui-text-primary)' : 'text-(--ui-text-tertiary)'),
+    children: [i > 0 && jsx('span', { className: 'text-(--ui-text-quaternary)', children: '→' }), PHASE_LABEL[p]]
+  }, p)) })
+}
+
+// ---------- lesson pane (right of the chat) ----------
+function LessonPane({ ctx }) {
+  const sid = sdk.useValue && sdk.host.state ? sdk.useValue(sdk.host.state.focusedStoredSessionId) : null
+  const data = usePoll(ctx, sid ? `/lesson?session=${encodeURIComponent(sid)}` : null, 3000)
+  const les = data && data.lesson
+  const body = []
+  if (!les) {
+    body.push(jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children:
+      'No lesson in this chat. Start one here, or type /learnloop:study <topic> in a chat.' }, 'e'))
+    body.push(jsx(StartBox, { compact: true }, 's'))
+  } else {
+    body.push(jsx('div', { className: 'text-sm font-semibold leading-snug', children: les.goal }, 'g'))
+    body.push(jsx(PhaseSteps, { phase: les.phase }, 'p'))
+    const plan = les.plan
+    const reached = plan ? plan.nodes.filter(n => n.state !== 'todo').length : 0
+    body.push(jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: [
+      plan ? `${reached}/${plan.nodes.length} steps` : 'Measuring what you already know',
+      `${les.answered} answered (${les.correct} correct)`
+    ].join(' · ') }, 'st'))
+    if (plan) {
+      body.push(jsx('div', { className: 'learnloop-map overflow-x-auto [&_p]:my-0', children:
+        jsx(Md, { text: '```mermaid\n' + plan.mermaid + '\n```' }) }, 'm'))
+      body.push(jsx('ol', { className: 'flex flex-col gap-1 text-sm', children: plan.nodes.map(n => jsxs('li', {
+        className: cn('flex gap-2', n.state === 'current' ? 'font-semibold' : n.state === 'todo' ? 'text-(--ui-text-tertiary)' : ''),
+        children: [jsx('span', { className: 'w-3 shrink-0', style: n.state === 'done' ? { color: VERDICT.correct.tone } : undefined,
+          children: STATE_MARK[n.state] }), n.title]
+      }, n.id)) }, 'n'))
+    } else if (les.phase === 'probe') {
+      body.push(jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children:
+        'The plan appears here once the probe has found where your understanding ends.' }, 'pp'))
+    }
+    if (les.open_question) {
+      body.push(jsxs('div', { className: 'rounded-md border border-(--ui-stroke-secondary) px-2 py-1.5 text-xs', children: [
+        jsx(Label, { children: 'Open question' }), jsx('div', { className: 'line-clamp-3 [&_p]:my-0', children: jsx(Md, { text: les.open_question.prompt }) })
+      ] }, 'q'))
+    }
+    if (les.facts.length) {
+      body.push(jsxs('div', { className: 'flex flex-col gap-1', children: [
+        jsx(Label, { children: 'Learned in this lesson' }),
+        ...les.facts.map((f, i) => jsx('div', { className: 'text-xs', title: f.statement, children: `• ${f.name}` }, i))
+      ] }, 'f'))
+    }
+  }
+  return jsx('div', { className: 'flex h-full flex-col gap-3 overflow-y-auto p-3 text-(--ui-text-primary)', children: body })
+}
+
+// ---------- Learn page (sidebar) ----------
+function LearnPage({ ctx }) {
+  const data = usePoll(ctx, '/lessons', 5000)
+  const graph = usePoll(ctx, '/graph', 15000)
+  const [q, setQ] = useState('')
+  const lessons = (data && data.lessons) || []
+  const stats = data && data.stats
+  const facts = ((graph && graph.propositions) || []).filter(p => !q.trim() ||
+    (p.name + ' ' + p.statement).toLowerCase().includes(q.trim().toLowerCase()))
+  const byId = new Map(((graph && graph.propositions) || []).map(p => [p.id, p.name]))
+  const premisesOf = new Map()
+  for (const c of (graph && graph.chains) || []) premisesOf.set(c.conclusion, [...(premisesOf.get(c.conclusion) || []), ...c.premises])
+  const open = l => typeof sdk.host.openSession === 'function' ? sdk.host.openSession(l.session_id) : null
+  const In = sdk.Input || 'input'
+  return jsxs('div', { className: 'mx-auto flex h-full w-full max-w-3xl flex-col gap-6 overflow-y-auto p-6 text-(--ui-text-primary)', children: [
+    jsxs('div', { className: 'flex flex-col gap-1', children: [
+      jsx('h1', { className: 'text-xl font-semibold', children: 'Learn' }),
+      jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: stats
+        ? `${stats.propositions} facts and ${stats.chains} reasoning links in your knowledge graph · ${stats.lessons} lessons`
+        : 'Structured lessons: probe what you know, plan a path, learn it step by step.' })
+    ] }),
+    jsx(StartBox, {}),
+    jsxs('section', { className: 'flex flex-col gap-2', children: [
+      jsx(Label, { children: 'Lessons' }),
+      lessons.length === 0 && jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'No lessons yet.' }),
+      ...lessons.map(l => jsxs('button', {
+        type: 'button', onClick: () => open(l),
+        className: 'flex flex-col gap-0.5 rounded-md border border-(--ui-stroke-secondary) px-3 py-2 text-left hover:border-(--ui-accent)',
+        children: [
+          jsx('div', { className: 'text-sm font-medium', children: l.goal }),
+          jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: [
+            PHASE_LABEL[l.phase] || l.phase,
+            l.steps ? `${l.reached}/${l.steps} steps` : null,
+            `${l.answered} answered`, `${l.facts} facts`,
+            when(l.updated_at)
+          ].filter(Boolean).join(' · ') })
+        ]
+      }, l.id))
+    ] }),
+    jsxs('section', { className: 'flex flex-col gap-2', children: [
+      jsx(Label, { children: 'What you know' }),
+      jsx(In, { value: q, onChange: e => setQ(e.target.value), placeholder: 'Search your knowledge graph', className: 'text-sm' }),
+      ...facts.slice(0, 200).map(p => jsxs('div', { className: 'flex flex-col gap-0.5 border-b border-(--ui-stroke-secondary) py-2 text-sm', children: [
+        jsx('div', { className: 'font-medium', children: p.name }),
+        jsx('div', { className: 'text-(--ui-text-secondary) [&_p]:my-0', children: jsx(Md, { text: p.statement }) }),
+        premisesOf.has(p.id) && jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children:
+          'from: ' + [...new Set(premisesOf.get(p.id))].map(id => byId.get(id)).filter(Boolean).join(', ') })
+      ] }, p.id))
+    ] })
+  ] })
+}
+
 export default {
   id: 'learnloop',
   name: 'learnloop',
@@ -203,6 +361,20 @@ export default {
     // Tell the backend the Desktop half is live: learnloop only emits cards once it has (KI-7).
     ctx.rest('/hello', { method: 'POST' }).catch(() => {})
     if (typeof sdk.TRANSCRIPT_DIRECTIVE_AREA !== 'string') return
+    ctx.registerMany([
+      {
+        id: 'lesson',
+        area: 'panes',
+        title: 'Lesson',
+        // hideOnly: closing hides the pane instead of disabling learnloop (Desktop's own flag for standing chrome).
+        data: { placement: 'right', width: '320px', hideOnly: true },
+        render: () => jsx(LessonPane, { ctx })
+      },
+      ...(typeof sdk.ROUTES_AREA === 'string' ? [
+        { id: 'learn-page', area: sdk.ROUTES_AREA, data: { path: '/learnloop' }, render: () => jsx(LearnPage, { ctx }) },
+        { id: 'learn-nav', area: sdk.SIDEBAR_NAV_AREA, data: { path: '/learnloop', label: 'Learn', codicon: 'mortar-board' } }
+      ] : [])
+    ])
     ctx.register({
       id: 'question-card',
       area: sdk.TRANSCRIPT_DIRECTIVE_AREA,

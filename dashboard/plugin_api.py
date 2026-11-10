@@ -54,6 +54,21 @@ def hello():
     return _call(lambda pkg, store: (store.set_setting("desktop_ui", "seen"), {"ok": True})[1])
 
 
+@router.get("/lesson")
+def lesson(session: str = ""):
+    return _call(lambda pkg, store: pkg.core.lesson_view(store, session))
+
+
+@router.get("/lessons")
+def lessons():
+    return _call(lambda pkg, store: pkg.core.lessons_overview(store))
+
+
+@router.get("/graph")
+def graph():
+    return _call(lambda pkg, store: store.graph())
+
+
 @router.get("/question/{question_id}")
 def get_question(question_id: str):
     return _call(lambda pkg, store: store.public_question(question_id))
