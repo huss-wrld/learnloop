@@ -50,7 +50,7 @@ function Option({ i, text, selected, multi, onClick, mark }) {
         className: cn('mt-0.5 inline-flex size-5 shrink-0 items-center justify-center text-xs font-semibold',
           multi ? 'rounded-sm' : 'rounded-full', 'border border-(--ui-stroke-secondary)'),
         style: selected ? { background: 'var(--ui-accent)', color: 'var(--background, #fff)', borderColor: 'var(--ui-accent)' } : undefined,
-        children: LETTERS[i]
+        children: i >= 0 ? LETTERS[i] : '?'
       }),
       jsx('div', { className: 'min-w-0 flex-1', children: jsx(Md, { text }) })
     ]
@@ -126,10 +126,16 @@ function QuestionCard({ ctx, id, sessionId }) {
     ctx.rest(`/question/${id}`).then(setQ, e => setError(String(e && e.message ? e.message : e)))
   }, [ctx, id])
   useEffect(load, [load])
-  // A free answer waits for the model's verdict: poll until it's graded.
+  // Answered in the dock: take its result the moment it's submitted (multiple choice is graded on submit).
   useEffect(() => {
-    if (!q || q.status !== 'open' || !q.submission) return undefined
-    const t = setInterval(load, 4000)
+    const f = () => { if (DOCK.q && DOCK.q.id === id && DOCK.q.submission) setQ(DOCK.q) }
+    DOCK.listeners.add(f)
+    return () => DOCK.listeners.delete(f)
+  }, [id])
+  // Poll while open: a free answer waits for the model's verdict; a dock answer may come from another surface.
+  useEffect(() => {
+    if (!q || q.status !== 'open') return undefined
+    const t = setInterval(load, q.submission ? 4000 : 3000)
     return () => clearInterval(t)
   }, [q, load])
 
@@ -174,6 +180,11 @@ function QuestionCard({ ctx, id, sessionId }) {
     return shell([header, prompt, jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'The lesson ended before this was answered.' })])
   }
   if (q.submission || q.status === 'answered') return shell([header, prompt, jsx(Result, { q })])
+  if (HAS_DOCK && sdk.COMPOSER_AREAS.middleware) {
+    // the open question is answered in the dock above the message box (LearnHarness's question dock)
+    return shell([header, prompt, jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children:
+      'Answer above the message box: pick an option there and write your thinking in the box.' })])
+  }
 
   const toggle = i => setChoices(q.multi ? (choices.includes(i) ? choices.filter(c => c !== i) : [...choices, i]) : [i])
   const ready = q.kind === 'mc' ? choices.length > 0 : text.trim().length > 0
@@ -378,15 +389,15 @@ function PhaseSteps({ phase }) {
 }
 
 
+// Solid: the composer fades and shows the transcript through when scrolled up (10 Nov screenshot).
+const DOCK_BG = { background: 'var(--ui-bg-elevated, var(--ui-bg-card, var(--background)))', borderRadius: 8 }
+
 // ---------- practice dock (above the composer) ----------
 // LearnHarness's practice dock: while a problem is open, the problem sits on the composer and the learner's
 // messages are his thinking. Hermes lets plugins add a strip above the input (COMPOSER_AREAS.top), not replace it.
-function PracticeDock({ ctx }) {
-  const sid = sdk.useValue && sdk.host.state ? sdk.useValue(sdk.host.state.focusedStoredSessionId) : null
-  const data = usePoll(ctx, sid ? `/lesson?session=${encodeURIComponent(sid)}` : null, 2500)
+function PracticeDock({ ctx, sid, pr }) {
   const [open, setOpen] = useState(true)
   const [busy, setBusy] = useState(false)
-  const pr = data && data.lesson && data.lesson.phase === 'practice' ? data.lesson.practice : null
   if (!pr || (!pr.open_problem && !pr.paused)) return null
   const Btn = sdk.Button || 'button'
   const say = line => {
@@ -406,12 +417,12 @@ function PracticeDock({ ctx }) {
   }
   const small = 'text-xs text-(--ui-text-tertiary) hover:text-(--ui-text-primary)'
   if (!pr.open_problem) {
-    return jsxs('div', { className: 'flex items-center gap-3 px-3 py-2 text-xs', children: [
+    return jsxs('div', { className: 'flex items-center gap-3 px-3 py-2 text-xs', style: DOCK_BG, children: [
       jsx(Btn, { type: 'button', onClick: () => say('Next problem'), children: 'Next problem' }),
       jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'Or ask anything about the last one.' })
     ] })
   }
-  return jsxs('div', { className: 'flex flex-col gap-1.5 px-3 py-2', children: [
+  return jsxs('div', { className: 'flex flex-col gap-1.5 px-3 py-2', style: DOCK_BG, children: [
     jsx(Style, {}, 'css'),
     jsxs('div', { className: 'flex items-center gap-3', children: [
       jsx('button', { type: 'button', onClick: () => setOpen(!open), className: 'flex items-center gap-1',
@@ -424,6 +435,134 @@ function PracticeDock({ ctx }) {
     open && jsx('div', { className: 'overflow-y-auto text-sm', style: { maxHeight: '30vh' },
       children: jsx(Md, { text: pr.open_problem.statement }) })
   ] })
+}
+
+
+// ---------- question dock (LearnHarness's question dock, above the composer) ----------
+// The open question sits on the composer; the message box IS "Your thinking": Enter submits the answer.
+// Hermes lets plugins add a strip above the input and rewrite a draft on send (COMPOSER_AREAS.middleware),
+// not replace the input, so the dock holds the choices and confidence and the middleware turns the typed text
+// into the answer. The middleware isn't told which chat it's in: it acts for the focused chat's open question.
+const DOCK = { sid: null, q: null, choices: [], idk: false, confidence: '50', listeners: new Set() }
+const dockSet = patch => { Object.assign(DOCK, patch); DOCK.listeners.forEach(f => f()) }
+function useDock() {
+  const [, bump] = useState(0)
+  useEffect(() => { const f = () => bump(n => n + 1); DOCK.listeners.add(f); return () => DOCK.listeners.delete(f) }, [])
+  return DOCK
+}
+const dockArmed = () => !!(DOCK.q && DOCK.q.status === 'open' && !DOCK.q.submission)
+
+function makeAnswerMiddleware(ctx) {
+  return {
+    handler: async draft => {
+      if (!dockArmed()) return draft
+      const typed = (draft && draft.text) || ''
+      if (typed.trim().startsWith('/')) return draft  // slash commands (e.g. /learnloop stop) pass through
+      const q = DOCK.q
+      if (q.kind === 'mc' && !DOCK.idk && DOCK.choices.length === 0) {
+        sdk.host.notify({ kind: 'info', message: "Pick an option (or I don't know) above the message box first." })
+        return null
+      }
+      if (q.kind !== 'mc' && !DOCK.idk && !typed.trim()) {
+        sdk.host.notify({ kind: 'info', message: 'Write your answer in the message box.' })
+        return null
+      }
+      const thinking = typed === DOCK_EMPTY ? '' : typed
+      const body = { dont_know: DOCK.idk, confidence: DOCK.idk ? null : Number(DOCK.confidence), thinking: '' }
+      if (!DOCK.idk) Object.assign(body, q.kind === 'mc' ? { choices: DOCK.choices, thinking } : { text: thinking })
+      else body.thinking = thinking
+      try {
+        const r = await ctx.rest(`/question/${q.id}/submit`, { method: 'POST', body })
+        dockSet({ q: r.question, choices: [], idk: false })
+        return { ...draft, text: r.line }
+      } catch (e) {
+        sdk.host.notify({ kind: 'warning', message: `learnloop: ${e && e.message ? e.message : e}` })
+        return null
+      }
+    }
+  }
+}
+const DOCK_EMPTY = '(no thinking written)'
+
+function QuestionDock({ ctx, sid, qid }) {
+  const d = useDock()
+  useEffect(() => {
+    let live = true
+    ctx.rest(`/question/${qid}`).then(q => {
+      if (!live) return
+      if (!DOCK.q || DOCK.q.id !== q.id) dockSet({ sid, q, choices: [], idk: false, confidence: '50' })
+      else dockSet({ sid, q })
+    }, () => {})
+    return () => { live = false }
+  }, [ctx, sid, qid])
+  useEffect(() => () => { if (DOCK.q && DOCK.q.id === qid && !DOCK.q.submission) dockSet({ q: null }) }, [qid])
+  const q = d.q && d.q.id === qid ? d.q : null
+  if (q && q.submission) return jsx(DockResult, { q })
+  if (!q || !dockArmed()) return null
+  const toggle = i => dockSet({ idk: false, choices: q.multi ? (d.choices.includes(i) ? d.choices.filter(c => c !== i) : [...d.choices, i]) : [i] })
+  const kind = q.qtype === 'predict' ? 'Prediction' : q.qtype === 'check' ? 'Check' : 'Question'
+  const Btn = sdk.Button || 'button'
+  const submit = async () => {
+    const text = (await sdk.host.composer.getDraft(sid ?? null)) || ''
+    const sent = sdk.host.composer.submit(sid ?? null, text.trim() ? text : DOCK_EMPTY)
+    if (sent && text.trim()) sdk.host.composer.setDraft(sid ?? null, '')
+  }
+  return jsxs('div', { className: 'flex flex-col gap-2 overflow-y-auto px-3 pt-3 pb-1',
+    style: { maxHeight: '45vh', background: 'var(--ui-bg-elevated, var(--ui-bg-card, var(--background)))' }, children: [
+      jsx(Style, {}, 'css'),
+      jsx(Label, { children: kind }),
+      jsx('div', { className: 'text-sm font-medium', children: jsx(Md, { text: q.prompt }) }),
+      q.kind === 'mc' && jsxs('div', { className: 'flex flex-col gap-1.5', children: [
+        q.multi && jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: 'More than one is right: select all that apply.' }),
+        ...q.options.map((o, i) => jsx(Option, { i, text: o, multi: q.multi, selected: !d.idk && d.choices.includes(i), onClick: () => toggle(i) }, i)),
+        jsx(Option, { i: -1, text: "I don't know", selected: d.idk, onClick: () => dockSet({ idk: !d.idk, choices: [] }) }, 'idk')
+      ] }),
+      q.kind !== 'mc' && jsxs('div', { className: 'flex items-center gap-3 text-xs text-(--ui-text-tertiary)', children: [
+        jsx('span', { children: 'Write your answer in the message box below.' }),
+        jsx('button', { type: 'button', onClick: () => dockSet({ idk: !d.idk }),
+          className: cn('ml-auto hover:text-(--ui-text-primary)', d.idk && 'font-semibold text-(--ui-text-primary)'), children: "I don't know" })
+      ] }),
+      !d.idk && jsxs('div', { className: 'flex items-center gap-3', children: [
+        jsx(Label, { children: 'Confidence' }),
+        jsx('div', { className: 'min-w-0 flex-1', children: sdk.SegmentedControl
+          ? jsx(sdk.SegmentedControl, { value: d.confidence, onChange: v => dockSet({ confidence: v }), sizing: 'equal',
+            options: STOPS.map(s => ({ id: s, label: `${s}%` })) })
+          : jsx('div', { className: 'flex gap-1', children: STOPS.map(s => jsx('button', { type: 'button', onClick: () => dockSet({ confidence: s }), children: `${s}%` }, s)) }) })
+      ] }),
+      jsxs('div', { className: 'flex items-center gap-2', children: [
+        jsx('span', { className: 'text-xs text-(--ui-text-tertiary)', children:
+          q.kind === 'mc' ? 'Your thinking goes in the message box below · Enter submits' : 'Enter submits' }),
+        jsx(Btn, { type: 'button', className: 'ml-auto', onClick: submit, children: 'Submit answer' })
+      ] })
+    ] })
+}
+
+// The verdict, right at the input, until the next question arrives (the chat's card keeps the full record).
+function DockResult({ q }) {
+  const r = q.result
+  const v = r ? (VERDICT[r.verdict] || VERDICT.wrong) : null
+  const right = r && r.correct ? r.correct.map(i => `${LETTERS[i]}) ${q.options[i]}`).join(', ') : ''
+  return jsxs('div', { className: 'flex flex-col gap-1 px-3 py-2 text-sm', style: DOCK_BG, children: [
+    jsx(Style, {}, 'css'),
+    v ? jsxs('div', { className: 'flex items-baseline gap-2', children: [
+      jsx('span', { className: 'font-semibold', style: { color: v.tone }, children: v.label }),
+      r.verdict !== 'correct' && right && jsx('span', { className: 'min-w-0 text-(--ui-text-secondary)', children: jsx(Md, { text: 'Correct: ' + right }) })
+    ] }) : jsx('div', { className: 'text-(--ui-text-tertiary)', children: 'Answer sent: waiting for the verdict.' })
+  ] })
+}
+
+function LearnDock({ ctx }) {
+  useDock()
+  const sid = sdk.useValue && sdk.host.state ? sdk.useValue(sdk.host.state.focusedStoredSessionId) : null
+  const data = usePoll(ctx, sid ? `/lesson?session=${encodeURIComponent(sid)}` : null, 2500)
+  const les = data && data.lesson
+  // keep the last answer's verdict on show after grading, until the next question or another chat
+  useEffect(() => { if (DOCK.q && DOCK.sid !== sid) dockSet({ q: null }) }, [sid])
+  if (!les) return null
+  if (les.phase === 'practice') return jsx(PracticeDock, { ctx, sid, pr: les.practice })
+  if (les.open_question) return jsx(QuestionDock, { ctx, sid, qid: les.open_question.id }, les.open_question.id)
+  if (DOCK.q && DOCK.q.submission && DOCK.sid === sid) return jsx(DockResult, { q: DOCK.q })
+  return null
 }
 
 // ---------- lesson pane (right of the chat) ----------
@@ -1079,7 +1218,12 @@ export default {
         { id: 'learn-nav', area: sdk.SIDEBAR_NAV_AREA, data: { path: '/learnloop', label: 'Learn', codicon: 'mortar-board' } }
       ] : [])
     ])
-    if (HAS_DOCK) ctx.register({ id: 'practice-dock', area: sdk.COMPOSER_AREAS.top, render: () => jsx(PracticeDock, { ctx }) })
+    if (HAS_DOCK) {
+      ctx.register({ id: 'learn-dock', area: sdk.COMPOSER_AREAS.top, render: () => jsx(LearnDock, { ctx }) })
+      if (sdk.COMPOSER_AREAS.middleware) {
+        ctx.register({ id: 'answer-middleware', area: sdk.COMPOSER_AREAS.middleware, data: makeAnswerMiddleware(ctx) })
+      }
+    }
     ctx.register({
       id: 'problem-card',
       area: sdk.TRANSCRIPT_DIRECTIVE_AREA,

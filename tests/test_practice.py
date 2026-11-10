@@ -218,3 +218,10 @@ def test_composer_messages_join_the_trace(practising):
     assert [t["text"] for t in practising.problem(p["id"])["trace"]] == ["each term has variance 1, so maybe 64?"]
     v = core.lesson_view(practising, "s1")["lesson"]["practice"]
     assert v["open_problem"]["id"] == p["id"] and v["open_problem"]["submissions"] == 1
+
+
+def test_brief_is_not_practice_thinking(practising):
+    from .test_core import BRIEF
+    p = practising.pose("s1", "What is Var(q.k) for d_k = 64?", "recall", SOL)
+    ctx = core.turn_context(practising, "s1", BRIEF)
+    assert "isn't a submission" in ctx and practising.problem(p["id"])["trace"] == []

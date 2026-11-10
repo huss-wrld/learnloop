@@ -240,3 +240,13 @@ Three halves, three reloads:
 ## KI-19. Desktop compiles Tailwind from its own sources (Mitigated)
 
 **What happens.** A class in `plugin.js` works only if Desktop's own source uses the same class; others silently do nothing (the graph's detail card rendered see-through). **Mitigation:** `tests/test_desktop_classes.py` fails on any class Desktop never compiles; the rest is inline styles and a small scoped stylesheet (`STYLE` in `plugin.js`).
+
+---
+
+## KI-20. The answer hook acts for the focused chat (Accepted)
+
+**What happens.** The question dock turns the message box into "Your thinking": a composer middleware rewrites the typed text into the answer when a question is open. Hermes doesn't tell a middleware which chat's composer it runs for, so it acts for the **focused** chat's open question. With two chats side by side, typing in the unfocused one while the focused one has an open question would be taken as that question's answer.
+
+**Mitigation.** Desktop focuses the chat you type in, so this needs an unusual layout. Slash commands always pass through.
+
+**Revisit when.** Hermes passes the session to composer middleware.

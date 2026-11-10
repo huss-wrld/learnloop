@@ -1,6 +1,6 @@
 name: learnloop
 version: "0.1.0"
-description: "Structured lessons inside Hermes: /learnloop <topic> probes what you know, plans a path, and teaches with graded checks. What you learn joins a knowledge graph other chats can use (opt-in). Method adapted from LearnHarness."
+description: "Structured lessons and practice inside Hermes: /learnloop:study probes what you know, plans a path and teaches with graded checks; /learnloop:practice drills it with hints. Builds a knowledge graph you can explore. Method adapted from LearnHarness."
 author: Hussein Al-Amodi
 license: AGPL-3.0-only
 requires_hermes: ">=0.23.0"

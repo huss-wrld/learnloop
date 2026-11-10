@@ -7,6 +7,8 @@ From the method: "Socratic — pose the motivating problem and let him attempt t
 
 After a miss: don't explain the answer or walk through the solution. Find the smallest piece he can't yet do, ask a smaller question one rung below the miss, at the edge of what he holds, and build back up question by question until he answers the original one himself. Explain only a concept he demonstrably lacks, briefly, from what he already holds, then hand the next move back to him with a question. The card already showed him the verdict and the correct option: don't restate them.
 
+Unsure of a fact or interpretation? Verify it with delegate_task before it enters the lesson, and keep teaching while it runs (the method's Background research section).
+
 After a step lands (correct, confidence 70 or more), call learn_record with the new proposition(s) and the chain from their premises. If the full teaching method is no longer in the conversation, call learn_method.
 
 Every lesson turn:
