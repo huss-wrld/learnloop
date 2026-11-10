@@ -21,6 +21,11 @@ from drive import PROFILE_HOME, RUNS, snapshot  # noqa: E402
 
 QUESTION = re.compile(r"\*\*Question\.\*\*")
 CARD = re.compile(r"^::learnloop-question\{id=\"(q_[0-9a-f]+)\"\}\s*$", re.M)
+PROBLEM_CARD = re.compile(r"^::learnloop-problem\{id=\"(x_[0-9a-f]+)\"\}\s*$", re.M)
+# same go-ahead rule learnloop's hook uses
+GO_AHEAD = re.compile(r"^\W*(?:ok(?:ay)?\W+|sure\W+|yes\W+)?(?:next(?: one| problem| please)?|another(?: one)?"
+                      r"|(?:give me |let'?s (?:do |have )?|on to |go to )?(?:the |a )?(?:next|another|new) "
+                      r"(?:one|problem)|ready(?: for (?:the )?next)?)\W*$", re.I)
 LEARN = ("learn_ask", "learn_grade", "learn_phase", "learn_method", "learn_record", "learn_recall")
 
 
@@ -67,15 +72,36 @@ def score(run: str) -> str:
     graded_types = [r[0] for r in ldb.execute(
         "SELECT q.qtype FROM questions q JOIN lessons l ON l.id = q.lesson_id WHERE l.session_id = ? "
         "AND q.status = 'answered' ORDER BY q.answered_at, q.rowid", (state["session_id"],))]
-    phase, open_q = "probe", False
+    practice = state.get("skill") == "practice"
+    phase, open_q = ("practice" if practice else "probe"), False
+    pcounts = {"posed": 0, "shown": 0, "pose_refused_pause": 0, "posed_in_pause": [], "concluded": 0}
+    paused = False
     flags = {k: [] for k in ("hand_typed", "doubled", "not_graded_first", "probe_teaching",
                              "early_record", "errors", "parse_errors", "blocked", "explained_after_miss")}
     counts = {"questions_asked": 0, "graded": 0, "records": 0, "refusals": 0, "turns": len(turns),
               "teach_misses": 0, "check_misses": 0}
-    phases_seen = ["probe"]
+    phases_seen = [phase]
     for i, t in enumerate(turns):
         tools = [m for m in t["items"] if m["role"] == "tool"]
         texts = [m for m in t["items"] if m["role"] == "assistant" and (m["content"] or "").strip()]
+        if practice:  # the pause law: after a conclusion, a new problem only on the learner's go-ahead
+            go = bool(GO_AHEAD.match((t["user"]["content"] or "").strip()))
+            pcounts["shown"] += sum(len(PROBLEM_CARD.findall(m["content"])) for m in texts)
+            for m in tools:
+                res = tool_json(m)
+                if m["tool_name"] == "learn_problem":
+                    if "error" in res:
+                        pcounts["pose_refused_pause"] += "Paused" in res["error"]
+                    else:
+                        pcounts["posed"] += 1
+                        if paused and not go:
+                            pcounts["posed_in_pause"].append(t["user"]["id"])
+                        paused = False
+                elif m["tool_name"] == "learn_conclude" and "error" not in res:
+                    pcounts["concluded"] += 1
+                    paused = True
+            if (t["user"]["content"] or "").strip() == "I set this problem aside.":
+                paused = True
         learn_calls = [m for m in tools if m["tool_name"] in LEARN]
         asks_ok = [m for m in tools if m["tool_name"] == "learn_ask" and "error" not in tool_json(m)]
         counts["questions_asked"] += len(asks_ok)
@@ -169,6 +195,22 @@ def score(run: str) -> str:
         ("Input tokens per turn: median / max", f"{int(median(tok_in)) if tok_in else 0} / {max(tok_in) if tok_in else 0}", ""),
         ("Input tokens whole lesson (cached)", f"{cum[-1] if cum else 0} ({cum_cached[-1] if cum_cached else 0})", ""),
     ]
+    if practice:
+        probs = [dict(zip(("outcome", "rung", "miss", "status"), r)) for r in ldb.execute(
+            "SELECT p.outcome, p.rung, p.miss_class, p.status FROM problems p JOIN lessons l ON l.id = p.lesson_id "
+            "WHERE l.session_id = ? ORDER BY p.created_at, p.rowid", (state["session_id"],))]
+        outcomes = ", ".join(f"{p['outcome'] or p['status']}" + (f" ({p['rung']})" if p["rung"] else "") +
+                             (f" [{p['miss']}]" if p["miss"] else "") for p in probs)
+        keep = {"Other tool errors", "Parse failures", "Blocked by lesson guard", "Skills/memory files changed",
+                "Turns / median s / max s", "Input tokens per turn: median / max", "Input tokens whole lesson (cached)"}
+        rows = [r for r in rows if r[0] in keep]
+        rows[:0] = [
+            ("Problems posed via learn_problem / cards shown", f"{pcounts['posed']} / {pcounts['shown']}", ""),
+            ("Problems concluded · outcomes (rung) [miss]", pcounts["concluded"], outcomes),
+            ("Posed during the pause without a go-ahead", len(pcounts["posed_in_pause"]),
+             "; ".join(pcounts["posed_in_pause"])),
+            ("Poses refused by the pause gate", pcounts["pose_refused_pause"], ""),
+        ]
     model = state.get("model") or {"model": "profile default"}
     out = [f"# Scorecard: {run}", "", f"Session `{state['session_id']}` · topic: {state['topic']} · "
            f"model: {' / '.join(model.values())}", "",

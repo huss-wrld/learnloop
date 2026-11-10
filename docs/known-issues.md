@@ -207,3 +207,36 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 **What happens.** The lesson pane registers with `hideOnly: true`, so closing it hides it instead of disabling learnloop. Desktop's built-in tabs use the flag (`pane-shell/tree/store.ts:590`), but the plugin SDK docs don't mention it.
 
 **Revisit when.** A Desktop update drops or renames it: closing the pane would then disable the whole plugin.
+
+---
+
+## KI-16. Desktop sends a "stacked skill bundle" (Fixed)
+
+**What happened.** The Learn page's Start button produced Hermes's stacked-skill format (`"/learnloop:study /learnloop:study" stacked skill bundle`, topic on a `User instruction:` line) instead of the single-skill format the hook matched. No lesson started; the model got "No active lesson" from `learn_ask`.
+
+**Fix.** The hook recognises both formats by our own skill body's heading (`# learnloop lesson: start`, `# learnloop practice: start`) inside a Hermes scaffold, and reads the topic from either header (`core._invocation`, tests in `test_core.py`).
+
+---
+
+## KI-17. Reloading learnloop's code (Dev note)
+
+Three halves, three reloads:
+- **Hooks and tools** live in the gateway: `hermes -p <profile> plugins disable learnloop && hermes -p <profile> plugins enable learnloop` applies them to new sessions. Headless `hermes chat` runs go through the running gateway too.
+- **Dashboard API** (the cards' and pane's routes) lives in each profile's plugin host: `tools/reload_hosts.sh`.
+- **Desktop half** (`desktop/plugin.js`): Capabilities → Plugins → Rescan.
+
+---
+
+## KI-18. The model can go around learnloop with general tools (Open)
+
+**What happened.** In chat `local-5c1370cf…` (KI-16), after `learn_ask` said "No active lesson", the model inspected the plugin with `terminal` and `read_file`; the lesson appeared in the database a minute later, most likely created by the model calling learnloop's store from Python. In run `p1-flash` (stale gateway, KI-17) it spent 26 terminal calls diagnosing the missing tools.
+
+**Why it matters.** learnloop's guarantees (grade first, one open question, the practice pause) hold for its tools, not for a model with a shell. The lesson guard blocks skills and memory only.
+
+**Revisit when.** It happens with a working setup. Option: extend the guard to refuse `terminal`/`execute_code` calls that mention `plugin-data/learnloop` during and right after a refused learnloop call.
+
+---
+
+## KI-19. Desktop compiles Tailwind from its own sources (Mitigated)
+
+**What happens.** A class in `plugin.js` works only if Desktop's own source uses the same class; others silently do nothing (the graph's detail card rendered see-through). **Mitigation:** `tests/test_desktop_classes.py` fails on any class Desktop never compiles; the rest is inline styles and a small scoped stylesheet (`STYLE` in `plugin.js`).

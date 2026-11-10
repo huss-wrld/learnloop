@@ -30,8 +30,8 @@ Budget: ~13 h of build for Take + Adapt (deadline: PR open Tue 10 Nov night).
 **Take + Adapt total ≈ 13.5 h.** At budget; no slack for L7c graph view.
 
 Decisions (8 Nov 2026):
-- **L6 practice: Later.**
-- **L7c graph view: Include.** Schedule risk accepted. It's built after everything else, so it's the first thing cut if Tuesday slips.
+- **L6 practice: Later.** Update 10 Nov: built after all: `/learnloop:practice`, `learn_problem`/`learn_conclude`, the pause enforced in code, a problem card. Doctrine verbatim from LearnHarness.
+- **L7c graph view: Include.** Schedule risk accepted. It's built after everything else, so it's the first thing cut if Tuesday slips. Update 10 Nov: built as a layered canvas view on the Learn page (depth left to right, one band per lesson).
 - **L4c plan map: full Mermaid map, not a status list.** Desktop renders ```mermaid fences natively (`apps/desktop/src/components/assistant-ui/embeds/registry.tsx`) and the SDK exports `MessageTextContent` (`sdk/index.ts:1684`). So a `::learnloop-map` card can render the stored plan with `classDef` styling for done/current/next. Est. 2 h; live check U8.
 - **Command name:** `/study`, because `/learn` is a Hermes built-in (skill learning); a plugin command with a built-in's name is skipped silently (`hermes_cli/plugins.py:660`).
 - **Opt-in UX (8 Nov):** learnloop is inert until `/study <topic>`. The lesson is bound to that chat only. `/study stop` ends it. **No `learn_start` tool:** only the command starts lessons, so the model can't start one on its own. Recall in other chats is **off by default**, toggled with `/study recall on|off`; when it's used, the reply ends with a small "used learnloop knowledge" note (instruction in the injected context). Commands: `/study <topic> | stop | status | map | graph [words] | recall on|off | import <path>`.

@@ -3,6 +3,8 @@
     python3 tools/drive.py start <run-name> <topic...>   # sends /learnloop:study <topic>
     python3 tools/drive.py say <run-name> <message...>    # next learner message
     python3 tools/drive.py show <run-name>                # last visible reply again
+    DRIVE_SKILL=practice python3 tools/drive.py start <run> <topic>   # a practice session instead
+    python3 tools/drive.py think|hint|aside <run-name> [text]   # work the open problem like the card
     python3 tools/drive.py answer <run-name> [--choices B,C] [--text ...] [--idk] [--confidence 30]
                                   [--thinking ...] [--reading ...]   # answer the open card like a click
 
@@ -31,15 +33,15 @@ HERMES_WS = Path(os.environ.get(
 TIMEOUT = 600
 
 
-def skill_message(topic: str) -> str:
-    """The exact user message Hermes builds for `/learnloop:study <topic>` (built by Hermes itself)."""
+def skill_message(topic: str, skill: str = "study") -> str:
+    """The exact user message Hermes builds for `/learnloop:<skill> <topic>` (built by Hermes itself)."""
     code = ("import sys; sys.path.insert(0, '.'); "
             "from agent.skill_commands import build_skill_invocation_message as b; "
-            f"sys.stdout.write(b('/learnloop:study', {topic!r}))")
+            f"sys.stdout.write(b('/learnloop:{skill}', {topic!r}))")
     out = subprocess.run([str(HERMES_WS.parent / "venv/bin/python"), "-I", "-W", "ignore", "-c", code],
                          cwd=HERMES_WS, env={**os.environ, "HERMES_HOME": str(PROFILE_HOME)},
                          capture_output=True, text=True, check=True)
-    if "learnloop:study" not in out.stdout:
+    if f"learnloop:{skill}" not in out.stdout:
         sys.exit("could not build the skill message: is learnloop enabled in the test profile?")
     return out.stdout
 
@@ -75,13 +77,24 @@ def render_cards(reply: str) -> str:
                  q["prompt"]]
         lines += [f"{'ABCDEFGH'[i]}) {o}" for i, o in enumerate(q["options"])] or ["(free answer)"]
         return "\n".join(lines)
-    return re.sub(r'^::learnloop-question\{id="(q_[0-9a-f]+)"\}\s*$', card, reply, flags=re.M)
+    def problem(m):
+        p = json.loads(plugin_py(f"print(json.dumps(store.public_problem({m.group(1)!r})))"))
+        lines = [f"[PROBLEM {p['id']} · {p['status']}]", p["statement"]]
+        if p.get("result"):
+            r = p["result"]
+            lines += [f"[result: {r['outcome']} · rung {r['rung']}] {r['verdict']}", "[solution] " + r["model_solution"]]
+        return "\n".join(lines)
+    reply = re.sub(r'^::learnloop-question\{id="(q_[0-9a-f]+)"\}\s*$', card, reply, flags=re.M)
+    return re.sub(r'^::learnloop-problem\{id="(x_[0-9a-f]+)"\}\s*$', problem, reply, flags=re.M)
 
 
-def visible_reply(session_id: str, after_ts: float) -> str:
+def visible_reply(session_id: str) -> str:
+    """Assistant text after this turn's user message (by id: timestamps let the previous reply leak in)."""
     db = sqlite3.connect(f"file:{PROFILE_HOME / 'state.db'}?mode=ro", uri=True)
-    rows = db.execute("SELECT content FROM messages WHERE session_id=? AND role='assistant' AND timestamp>=? "
-                      "ORDER BY id", (session_id, after_ts)).fetchall()
+    last_user = db.execute("SELECT MAX(id) FROM messages WHERE session_id=? AND role='user'",
+                           (session_id,)).fetchone()[0] or 0
+    rows = db.execute("SELECT content FROM messages WHERE session_id=? AND role='assistant' AND id>? "
+                      "ORDER BY id", (session_id, last_user)).fetchall()
     return "\n\n".join(r[0] for r in rows if (r[0] or "").strip())
 
 
@@ -94,9 +107,10 @@ def turn(run: str, message: str, first: bool) -> None:
         if state:
             sys.exit(f"run {run} exists; pick a new name")
         state = {"run": run, "topic": message, "started": time.time(), "baseline_files": snapshot(), "turns": 0,
+                 "skill": os.environ.get("DRIVE_SKILL", "study"),
                  "model": {k: os.environ[f"DRIVE_{k.upper()}"] for k in ("model", "provider", "reasoning")
                            if os.environ.get(f"DRIVE_{k.upper()}")}}
-        message = skill_message(message)
+        message = skill_message(message, state["skill"])
     elif "session_id" not in state:
         sys.exit(f"run {run} has no session yet; use start")
     (d / "msg.txt").write_text(message, encoding="utf-8")
@@ -127,12 +141,13 @@ def turn(run: str, message: str, first: bool) -> None:
     state["turns"] += 1
     tools = [e.get("name") for e in events if e.get("type") == "tool_use"]
     rec = {"turn": state["turns"], "sent_at": t0, "seconds": round(time.time() - t0, 1), "timed_out": timed_out,
-           "learner": message if not first else f"/learnloop:study {state['topic']}", "tools": tools,
+           "learner": message if not first else f"/learnloop:{state.get('skill', 'study')} {state['topic']}",
+           "tools": tools,
            "tokens": result.get("tokens"), "exit_code": result.get("exit_code")}
     with open(d / "turns.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
     state_file.write_text(json.dumps(state, indent=1))
-    reply = render_cards(visible_reply(sid, t0 - 1))
+    reply = render_cards(visible_reply(sid))
     (d / "last_reply.md").write_text(reply, encoding="utf-8")
     print(f"--- turn {rec['turn']} · {rec['seconds']} s · tools: {', '.join(tools) or 'none'}"
           f"{' · TIMED OUT' if timed_out else ''}\n")
@@ -164,6 +179,17 @@ def answer(run: str, argv: list[str]) -> None:
     turn(run, res["line"], first=False)
 
 
+def problem_action(run: str, cmd: str, text: str) -> None:
+    """Work the open problem as the Desktop card does (Send / Hint / Set aside), then send the card's chat line."""
+    sid = json.loads((RUNS / run / "state.json").read_text())["session_id"]
+    call = (f"core.thinking_line(store.add_thinking(p['id'], {text!r}, hint={cmd == 'hint'}), {cmd == 'hint'})"
+            if cmd != "aside" else "(store.dismiss(p['id']), core.SET_ASIDE_LINE)[1]")
+    line = json.loads(plugin_py(
+        f"les = store.require_lesson({sid!r}); p = store.open_problem(les['id']); "
+        f"assert p, 'no open problem'; print(json.dumps({call}))"))
+    turn(run, line, first=False)
+
+
 def main() -> None:
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -174,6 +200,8 @@ def main() -> None:
         turn(run, rest, first=False)
     elif cmd == "answer":
         answer(run, sys.argv[3:])
+    elif cmd in ("think", "hint", "aside"):
+        problem_action(run, cmd, rest)
     elif cmd == "show":
         print((RUNS / run / "last_reply.md").read_text(encoding="utf-8"))
     else:
