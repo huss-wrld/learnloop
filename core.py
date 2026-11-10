@@ -755,6 +755,8 @@ def schemas() -> list[dict]:
         {"name": "learn_ask", "description":
             "learnloop lesson only: ask the learner ONE graded question (multiple choice with options+correct+"
             "explanation, or free recall with expected). Write explanation/expected BEFORE choosing correct. "
+            "Options are shown in shuffled order: never write options that point at other options ('both of the "
+            "above'), and in the explanation name options by their content. "
             "While teaching, also give type and node_id. Returns `show`: end your reply with it and stop.",
          "parameters": {"type": obj, "required": ["prompt"], "properties": {
              "prompt": {"type": s}, "options": {"type": arr, "items": {"type": s}},

@@ -6,6 +6,7 @@ Copyright (C) 2026 Hussein Al-Amodi. AGPL-3.0-only.
 from __future__ import annotations
 
 import json
+import random
 import re
 import sqlite3
 import threading
@@ -140,7 +141,24 @@ def parse_plan(mermaid: str) -> tuple[dict[str, str], list[tuple[str, str]]]:
     return nodes, edges
 
 
+_OPTION_REF = re.compile(r"\b([Oo]ptions?|[Cc]hoices?)(\s+)([A-H])((?:(?:,\s*|\s+and\s+|\s+or\s+|\s*/\s*)[A-H]\b)*)")
+
+
+def relabel_options(text: str, order: list[int]) -> str:
+    """Rewrite 'Option B' / 'options A and C' after a shuffle: order[new] = old position."""
+    if not text:
+        return text
+    new_of = {LETTERS[old]: LETTERS[new] for new, old in enumerate(order)}
+
+    def swap(m):
+        tail = re.sub(r"\b[A-H]\b", lambda t: new_of.get(t.group(0), t.group(0)), m.group(4))
+        return m.group(1) + m.group(2) + new_of.get(m.group(3), m.group(3)) + tail
+    return _OPTION_REF.sub(swap, text)
+
+
 class Store:
+    shuffle_options = True  # tests that address options by position turn this off
+
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
         self.conn.row_factory = sqlite3.Row
@@ -374,6 +392,14 @@ class Store:
         if open_q:
             raise grade_first(open_q)
         question_id = _new_id("q")
+        if opts and self.shuffle_options:
+            # After LearnHarness (question-core.ts shuffleOptions): models put the right option first (30 of 30
+            # on one profile), so the display order is shuffled here, seeded by the question id.
+            order = list(range(len(opts)))
+            random.Random(question_id).shuffle(order)
+            opts = [opts[i] for i in order]
+            idx = sorted(order.index(i) for i in idx)
+            explanation = relabel_options(explanation, order)
         with self._tx():
             self.conn.execute(
                 "INSERT INTO questions(id, lesson_id, phase, qtype, node_id, prompt, options, correct, "

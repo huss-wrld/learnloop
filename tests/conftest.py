@@ -14,6 +14,12 @@ ASSESS = {"strands": [{"strand": "dot product", "assessment": "Computes it insid
           "summary": "Enter from matrix multiplication."}
 
 
+@pytest.fixture(autouse=True)
+def fixed_option_order(monkeypatch):
+    """Most tests answer by position; test_shuffle.py turns the shuffle back on."""
+    monkeypatch.setattr(Store, "shuffle_options", False)
+
+
 @pytest.fixture
 def store():
     return Store(sqlite3.connect(":memory:", check_same_thread=False))
