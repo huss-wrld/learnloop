@@ -413,7 +413,7 @@ def lesson_view(store: Store, session_id: str) -> dict:
         done = set(st["visited"]) - {st["current"]}
         view["plan"] = {"mermaid": store.plan_mermaid(les["id"]), "nodes": [
             {"id": n, "title": t, "state": "current" if n == st["current"] else "done" if n in done else "todo"}
-            for n, t in st["nodes"].items()]}
+            for n, t in st["nodes"].items()], "edges": [list(e) for e in st["edges"]]}
     return {"lesson": view}
 
 

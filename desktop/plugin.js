@@ -565,8 +565,151 @@ function LearnDock({ ctx }) {
   return null
 }
 
+
+// ---------- plan map (our own drawing: progress first, readable at any size) ----------
+// Mermaid scales the whole plan into the space it gets, so a narrow pane turns it to slivers. This lays the plan
+// out top to bottom (rows = how many steps lead to it), draws a label-free thumbnail for the pane, and a
+// readable full map in a dialog over the chat (or inline on the Learn page).
+function layoutPlan(nodes, edges) {
+  const ids = nodes.map(n => n.id), known = new Set(ids)
+  const E = (edges || []).filter(([a, b]) => known.has(a) && known.has(b) && a !== b)
+  const parents = new Map(ids.map(i => [i, []])), kids = new Map(ids.map(i => [i, []]))
+  for (const [a, b] of E) { parents.get(b).push(a); kids.get(a).push(b) }
+  const depth = new Map(ids.map(i => [i, 0]))
+  for (let pass = 0; pass < ids.length; pass++) {           // longest path from a root; bounded, so a cycle can't hang
+    let moved = false
+    for (const [a, b] of E) if (depth.get(b) < depth.get(a) + 1) { depth.set(b, depth.get(a) + 1); moved = true }
+    if (!moved) break
+  }
+  const rows = []
+  ids.forEach(i => { const d = depth.get(i); (rows[d] = rows[d] || []).push(i) })
+  const pos = new Map()
+  const place = () => rows.forEach(r => r && r.forEach((id, k) => pos.set(id, k - (r.length - 1) / 2)))
+  place()
+  const bary = (id, nb) => { const ps = nb.get(id).filter(p => pos.has(p)); return ps.length ? ps.reduce((s, p) => s + pos.get(p), 0) / ps.length : pos.get(id) }
+  for (let sweep = 0; sweep < 4; sweep++) {
+    const nb = sweep % 2 ? kids : parents
+    rows.forEach(r => r && r.sort((a, b) => bary(a, nb) - bary(b, nb)))
+    place()
+  }
+  return { rows: rows.filter(Boolean), pos, depth, edges: E, parents }
+}
+
+const PLAN_TONE = {
+  done: { fill: 'color-mix(in srgb, var(--ui-success, #2e7d32) 22%, transparent)', stroke: 'var(--ui-success, #2e7d32)' },
+  current: { fill: 'color-mix(in srgb, var(--ui-warning, #f9a825) 30%, transparent)', stroke: 'var(--ui-warning, #f9a825)' },
+  next: { fill: 'transparent', stroke: 'var(--ui-accent, #6b8afd)' },
+  todo: { fill: 'transparent', stroke: 'var(--ui-stroke-secondary, #555)' }
+}
+
+function wrapTitle(t, width) {
+  const words = String(t).split(/\s+/), lines = []
+  let cur = ''
+  for (const w of words) {
+    if (cur && (cur + ' ' + w).length > width) { lines.push(cur); cur = w } else cur = cur ? cur + ' ' + w : w
+  }
+  if (cur) lines.push(cur)
+  return lines.slice(0, 3).map((l, i, a) => i === 2 && lines.length > 3 ? l + '…' : l)
+}
+
+// The links are the agent's own `a --> b` lines; read them from the plan text when the backend doesn't send them
+// (an older plugin host still running after an update).
+function planEdges(plan) {
+  if (plan.edges && plan.edges.length) return plan.edges
+  const out = []
+  for (const line of String(plan.mermaid || '').split('\n')) {
+    const m = line.match(/^\s*([a-z0-9_-]+)\s*(?:\[[^\]]*\])?\s*-->\s*([a-z0-9_-]+)/)
+    if (m) out.push([m[1], m[2]])
+  }
+  return out
+}
+
+function PlanMap({ plan, thumb = false, onOpen }) {
+  const L = useMemo(() => layoutPlan(plan.nodes, planEdges(plan)), [plan])
+  const state = new Map(plan.nodes.map(n => [n.id, n.state]))
+  const title = new Map(plan.nodes.map(n => [n.id, n.title]))
+  // "next": steps still to do whose prerequisites are all reached: where the lesson can go from here
+  const reached = id => state.get(id) === 'done' || state.get(id) === 'current'
+  const tone = id => state.get(id) !== 'todo' ? state.get(id)
+    : (L.parents.get(id).length ? L.parents.get(id).every(reached) : plan.nodes.some(n => n.state !== 'todo')) && plan.nodes.some(n => n.state !== 'todo') ? 'next' : 'todo'
+  const W = thumb ? 26 : 176, GX = thumb ? 8 : 22, GY = thumb ? 10 : 34, LINE = 15
+  const lines = new Map(plan.nodes.map(n => [n.id, thumb ? [] : wrapTitle(n.title, 25)]))
+  const H = id => thumb ? 9 : lines.get(id).length * LINE + 14
+  const rowH = L.rows.map(r => Math.max(...r.map(H)))
+  const rowY = []; rowH.reduce((y, h, i) => { rowY[i] = y; return y + h + GY }, 0)
+  const span = Math.max(...L.rows.map(r => r.length))
+  const width = span * W + (span - 1) * GX, height = rowY[rowY.length - 1] + rowH[rowH.length - 1]
+  const at = id => { const d = L.depth.get(id), k = L.rows.findIndex(r => r.includes(id))
+    return { x: width / 2 + L.pos.get(id) * (W + GX) - W / 2, y: rowY[k] + (rowH[k] - H(id)) / 2, h: H(id), d } }
+  const P = new Map(plan.nodes.map(n => [n.id, at(n.id)]))
+  const pad = thumb ? 2 : 6
+  const svg = jsxs('svg', {
+    viewBox: `${-pad} ${-pad} ${width + 2 * pad} ${height + 2 * pad}`,
+    width: thumb ? '100%' : width + 2 * pad, height: thumb ? '100%' : height + 2 * pad,
+    preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'Lesson map', style: { display: 'block' },
+    children: [
+      ...L.edges.map(([a, b]) => { const p = P.get(a), q = P.get(b)
+        const x1 = p.x + W / 2, y1 = p.y + p.h, x2 = q.x + W / 2, y2 = q.y, my = (y1 + y2) / 2
+        const lit = reached(a) && reached(b)
+        return jsx('path', { d: `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`, fill: 'none',
+          style: { stroke: lit ? PLAN_TONE.done.stroke : 'var(--ui-stroke-secondary, #555)', strokeOpacity: lit ? 0.8 : 0.6, strokeWidth: thumb ? 1 : 1.25 } }, a + '>' + b) }),
+      ...plan.nodes.map(n => { const p = P.get(n.id), t = PLAN_TONE[tone(n.id)]
+        return jsxs('g', { children: [
+          jsx('title', { children: title.get(n.id) }),
+          jsx('rect', { x: p.x, y: p.y, width: W, height: p.h, rx: thumb ? 2 : 7,
+            style: { fill: t.fill, stroke: t.stroke, strokeWidth: n.state === 'current' ? (thumb ? 1.5 : 2.5) : 1,
+              strokeDasharray: tone(n.id) === 'next' && !thumb ? '4 3' : undefined } }),
+          ...lines.get(n.id).map((l, i) => jsx('text', { x: p.x + W / 2, y: p.y + 7 + LINE * (i + 0.75), textAnchor: 'middle',
+            style: { fill: n.state === 'todo' ? 'var(--ui-text-secondary)' : 'var(--ui-text-primary)', fontSize: 12,
+              fontWeight: n.state === 'current' ? 600 : 400 }, children: l }, i))
+        ] }, n.id) })
+    ]
+  })
+  if (!thumb) return svg
+  return jsxs('button', { type: 'button', onClick: onOpen, title: 'Open the lesson map',
+    className: 'flex flex-col gap-1 rounded-md border border-(--ui-stroke-secondary) px-2 py-1.5 text-left hover:border-(--ui-stroke-primary)',
+    children: [jsx('div', { style: { height: Math.min(120, Math.max(48, L.rows.length * 13)), width: '100%' }, children: svg }),
+      jsx('span', { className: 'text-xs text-(--ui-text-tertiary)', children: 'Open map' })] })
+}
+
+function PlanLegend({ plan }) {
+  const done = plan.nodes.filter(n => n.state === 'done').length
+  const item = (k, label) => jsxs('span', { className: 'flex items-center gap-1', children: [
+    jsx('span', { style: { display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: PLAN_TONE[k].fill,
+      border: `1.5px ${k === 'next' ? 'dashed' : 'solid'} ${PLAN_TONE[k].stroke}` } }), label] }, k)
+  return jsxs('div', { className: 'flex items-center gap-3 text-xs text-(--ui-text-tertiary)', children: [
+    item('done', 'Done'), item('current', 'Now'), item('next', 'Up next'), item('todo', 'Later'),
+    jsx('span', { className: 'ml-auto', children: `${done} of ${plan.nodes.length} steps done` })] })
+}
+
+// The full map over the chat: the session stays where it is, Esc or a click outside closes it.
+function PlanDialog({ plan, goal, open, onClose }) {
+  useEffect(() => {
+    if (!open || sdk.Dialog) return undefined
+    const k = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [open, onClose])
+  if (!open || !plan) return null
+  const body = jsxs('div', { className: 'flex flex-col gap-3', style: { minWidth: 360 }, children: [
+    jsx(PlanLegend, { plan }),
+    jsx('div', { style: { maxHeight: '72vh', maxWidth: '86vw', overflow: 'auto' }, children: jsx(PlanMap, { plan }) })] })
+  if (sdk.Dialog && sdk.DialogContent) {
+    const Title = sdk.DialogTitle || 'div', Header = sdk.DialogHeader || 'div'
+    return jsx(sdk.Dialog, { open: true, onOpenChange: v => { if (!v) onClose() }, children: jsxs(sdk.DialogContent, { fitContent: true, children: [
+      jsx(Header, { children: jsx(Title, { children: goal ? `Lesson map · ${goal.length > 70 ? goal.slice(0, 70) + '…' : goal}` : 'Lesson map' }) }), body] }) })
+  }
+  return jsx('div', { onClick: onClose, style: { position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', background: 'rgba(0,0,0,0.45)' }, children: jsxs('div', { onClick: e => e.stopPropagation(),
+    style: { background: 'var(--ui-bg-elevated, var(--background))', border: '1px solid var(--ui-stroke-secondary)', borderRadius: 12, padding: 16 },
+    children: [jsx('div', { className: 'text-sm font-semibold', style: { marginBottom: 8 }, children: 'Lesson map' }), body] }) })
+}
+
 // ---------- lesson pane (right of the chat) ----------
 function LessonPane({ ctx }) {
+  const [allSteps, setAllSteps] = useState(false)
+  const [allFacts, setAllFacts] = useState(false)
+  const [mapOpen, setMapOpen] = useState(false)
   const sid = sdk.useValue && sdk.host.state ? sdk.useValue(sdk.host.state.focusedStoredSessionId) : null
   const data = usePoll(ctx, sid ? `/lesson?session=${encodeURIComponent(sid)}` : null, 3000)
   const les = data && data.lesson
@@ -576,7 +719,7 @@ function LessonPane({ ctx }) {
       'No lesson in this chat. Start one here, or type /learnloop:study <topic> in a chat.' }, 'e'))
     body.push(jsx(StartBox, { compact: true }, 's'))
   } else {
-    body.push(jsx('div', { className: 'text-sm font-semibold leading-snug', children: les.goal }, 'g'))
+    body.push(jsx('div', { className: 'line-clamp-2 text-sm font-semibold leading-snug', title: les.goal, children: les.goal }, 'g'))
     if (les.practice) {
       const pr = les.practice
       const solved = pr.problems.filter(p => p.outcome === 'solved' || p.outcome === 'solvedWithHints').length
@@ -603,32 +746,57 @@ function LessonPane({ ctx }) {
     }
     body.push(jsx(PhaseSteps, { phase: les.phase }, 'p'))
     const plan = les.plan
-    const reached = plan ? plan.nodes.filter(n => n.state !== 'todo').length : 0
-    body.push(jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: [
-      plan ? `${reached}/${plan.nodes.length} steps` : 'Measuring what you already know',
-      `${les.answered} answered (${les.correct} correct)`
-    ].join(' · ') }, 'st'))
+    const small = 'text-xs text-(--ui-text-tertiary) hover:text-(--ui-text-primary) self-start'
     if (plan) {
-      body.push(jsx('div', { className: 'learnloop-map overflow-x-auto', children:
-        jsx(Md, { text: '```mermaid\n' + plan.mermaid + '\n```' }) }, 'm'))
-      body.push(jsx('ol', { className: 'flex flex-col gap-1 text-sm', children: plan.nodes.map(n => jsxs('li', {
-        className: cn('flex gap-2', n.state === 'current' ? 'font-semibold' : n.state === 'todo' ? 'text-(--ui-text-tertiary)' : ''),
-        children: [jsx('span', { className: 'w-3 shrink-0', style: n.state === 'done' ? { color: VERDICT.correct.tone } : undefined,
-          children: STATE_MARK[n.state] }), n.title]
-      }, n.id)) }, 'n'))
-    } else if (les.phase === 'probe') {
-      body.push(jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children:
-        'The plan appears here once the probe has found where your understanding ends.' }, 'pp'))
+      const nodes = plan.nodes
+      const idx = nodes.findIndex(n => n.state === 'current')
+      const done = nodes.filter(n => n.state === 'done').length
+      const current = idx >= 0 ? nodes[idx] : null
+      const upcoming = nodes.filter((n, i) => n.state === 'todo' && i > idx).slice(0, 2)
+      body.push(jsxs('div', { className: 'flex flex-col gap-1.5', children: [
+        jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children:
+          `Step ${Math.min(nodes.length, done + 1)} of ${nodes.length} · ${les.correct}/${les.answered} correct` }),
+        jsx('div', { style: { height: 3, borderRadius: 2, background: 'color-mix(in srgb, var(--ui-stroke-secondary) 60%, transparent)' }, children:
+          jsx('div', { style: { height: 3, borderRadius: 2, width: `${Math.round(100 * done / Math.max(1, nodes.length))}%`, background: 'var(--ui-accent)' } }) })
+      ] }, 'st'))
+      body.push(jsx(PlanMap, { plan, thumb: true, onOpen: () => setMapOpen(true) }, 'map'))
+      body.push(jsx(PlanDialog, { plan, goal: les.goal, open: mapOpen, onClose: () => setMapOpen(false) }, 'mapd'))
+      if (current) {
+        body.push(jsxs('div', { className: 'flex flex-col gap-0.5', children: [
+          jsx(Label, { children: 'Now' }), jsx('div', { className: 'text-sm font-medium leading-snug', children: current.title })] }, 'now'))
+      }
+      if (upcoming.length) {
+        body.push(jsxs('div', { className: 'flex flex-col gap-0.5', children: [
+          jsx(Label, { children: 'Next' }),
+          ...upcoming.map(n => jsx('div', { className: 'text-xs text-(--ui-text-secondary)', children: n.title }, n.id))] }, 'next'))
+      }
+      body.push(jsx('button', { type: 'button', onClick: () => setAllSteps(!allSteps), className: small,
+        children: allSteps ? 'Hide steps' : `All steps (${nodes.length})` }, 'all'))
+      if (allSteps) {
+        body.push(jsx('ol', { className: 'flex flex-col gap-0.5 text-xs', children: nodes.map(n => jsxs('li', {
+          className: cn('flex gap-2', n.state === 'current' ? 'font-semibold' : n.state === 'todo' ? 'text-(--ui-text-tertiary)' : 'text-(--ui-text-secondary)'),
+          children: [jsx('span', { className: 'w-3 shrink-0', style: n.state === 'done' ? { color: VERDICT.correct.tone } : undefined,
+            children: STATE_MARK[n.state] }), n.title]
+        }, n.id)) }, 'n'))
+      }
+    } else {
+      body.push(jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: les.phase === 'probe'
+        ? `Measuring what you already know · ${les.answered} answered. The plan appears once the probe has found where your understanding ends.`
+        : `${les.answered} answered (${les.correct} correct)` }, 'pp'))
     }
-    if (les.open_question) {
+    // the dock above the message box already shows the open question; only show it here without one
+    if (les.open_question && !(HAS_DOCK && sdk.COMPOSER_AREAS.middleware)) {
       body.push(jsxs('div', { className: 'rounded-md border border-(--ui-stroke-secondary) px-2 py-1.5 text-xs', children: [
         jsx(Label, { children: 'Open question' }), jsx('div', { className: 'line-clamp-3', children: jsx(Md, { text: les.open_question.prompt }) })
       ] }, 'q'))
     }
     if (les.facts.length) {
-      body.push(jsxs('div', { className: 'flex flex-col gap-1', children: [
-        jsx(Label, { children: 'Learned in this lesson' }),
-        ...les.facts.map((f, i) => jsx('div', { className: 'text-xs', title: f.statement, children: `• ${f.name}` }, i))
+      const shown = allFacts ? les.facts : les.facts.slice(0, 3)
+      body.push(jsxs('div', { className: 'flex flex-col gap-0.5', children: [
+        jsx(Label, { children: `Learned (${les.facts.length}${les.facts.length >= 12 ? '+' : ''})` }),
+        ...shown.map((f, i) => jsx('div', { className: 'text-xs text-(--ui-text-secondary)', title: f.statement, children: f.name }, i)),
+        les.facts.length > 3 && jsx('button', { type: 'button', onClick: () => setAllFacts(!allFacts), className: small,
+          children: allFacts ? 'Show less' : `+${les.facts.length - 3} more` })
       ] }, 'f'))
     }
   }
@@ -753,9 +921,43 @@ export function layoutGraph(props, chains, opts = {}) {
 
 // Live physics after LearnHarness's graph (d3-force semantics, re-implemented: the catalog allows the SDK and
 // React only). Defaults are LearnHarness's own render settings (data/graph/render-settings.json). Exported for tests.
+// groupSpacing is ours: LearnHarness keeps clusters apart through its own region layout; here every group gets
+// its own slot (see groupAnchors) and this is the gap between slots.
 export const PHYSICS_DEFAULTS = {
   charge: 364, linkDistance: 40, linkStrength: 1, gravity: 0.104, clusterPull: 0.033, velocityDecay: 0.4,
-  depthMode: 'horizontal', depthStrength: 0.8, depthSpacing: 91, nodeSize: 5, labelZoom: 1.2
+  depthMode: 'vertical', depthStrength: 0.8, depthSpacing: 91, groupSpacing: 160, regions: true, nodeSize: 5, labelZoom: 1.2
+}
+
+// Each group (lesson) gets its own slot, packed in rows, biggest first. Depth is measured inside the group, so
+// one lesson's first facts no longer line up with every other lesson's on a shared strip. Exported for tests.
+export function groupAnchors(seed, P) {
+  const n = seed.x.length, G = seed.groups.length
+  const cnt = new Array(G).fill(0), dmin = new Array(G).fill(Infinity), dmax = new Array(G).fill(-Infinity)
+  for (let i = 0; i < n; i++) { const g = seed.gi[i]; cnt[g]++; dmin[g] = Math.min(dmin[g], seed.depth[i]); dmax[g] = Math.max(dmax[g], seed.depth[i]) }
+  const local = new Float64Array(n), span = dmax.map((d, g) => cnt[g] ? d - dmin[g] : 0)
+  for (let i = 0; i < n; i++) local[i] = seed.depth[i] - dmin[seed.gi[i]] - span[seed.gi[i]] / 2
+  const ax = new Float64Array(G), ay = new Float64Array(G)
+  if (G <= 1) return { ax, ay, local }
+  const along = g => P.depthMode === 'off' ? 0 : span[g] * P.depthSpacing          // extent on the depth axis
+  const across = g => Math.sqrt(cnt[g]) * (P.linkDistance + 30)                     // rough spread across it
+  const size = g => Math.max(along(g), across(g), 220)  // never narrower than its label
+  const order = [...Array(G).keys()].filter(g => cnt[g]).sort((a, b) => cnt[b] - cnt[a])
+  const total = order.reduce((s, g) => s + (size(g) + P.groupSpacing) ** 2, 0)
+  const rowMax = Math.max(size(order[0]) + P.groupSpacing, Math.sqrt(total) * 1.4)
+  // shelf packing: row along the cross axis; depth axis is the row's height
+  const placed = []
+  let u = 0, v = 0, rowH = 0
+  for (const g of order) {
+    const w = size(g)
+    if (u > 0 && u + w > rowMax) { u = 0; v += rowH + P.groupSpacing; rowH = 0 }
+    placed.push([g, u + w / 2, v + size(g) / 2])
+    u += w + P.groupSpacing; rowH = Math.max(rowH, size(g))
+  }
+  let ux = 0, uy = 0
+  for (const [, a, b] of placed) { ux += a; uy += b }
+  ux /= placed.length; uy /= placed.length
+  for (const [g, a, b] of placed) { ax[g] = a - ux; ay[g] = b - uy }
+  return { ax, ay, local }
 }
 const ALPHA_MIN = 0.001, ALPHA_DECAY = 1 - Math.pow(ALPHA_MIN, 1 / 300)
 
@@ -765,10 +967,17 @@ export function createSim(seed, settings) {
     fx: new Float64Array(n).fill(NaN), fy: new Float64Array(n).fill(NaN), alpha: 1, alphaTarget: 0, settings }
   const degree = new Float64Array(n)
   for (const [a, b] of seed.edges) { degree[a]++; degree[b]++ }
-  const maxDepth = Math.max(0, ...seed.depth)
   const groups = seed.groups.length
+  let anchorKey = '', A = null
+  const anchors = P => {
+    const key = [P.depthMode, P.depthSpacing, P.groupSpacing, P.linkDistance].join()
+    if (key !== anchorKey) { anchorKey = key; A = groupAnchors(seed, P) }
+    return A
+  }
+  S.anchors = () => anchors(S.settings)
   S.tick = () => {
     const P = S.settings, alpha = (S.alpha += (S.alphaTarget - S.alpha) * ALPHA_DECAY)
+    const { ax, ay, local } = anchors(P)
     const { x, y, vx, vy } = S
     // many-body repulsion (d3 forceManyBody, exact pairwise; fine at a few hundred facts)
     const k = -P.charge * alpha
@@ -789,19 +998,20 @@ export function createSim(seed, settings) {
       const bias = degree[a] / (degree[a] + degree[b])
       vx[b] -= dx * bias; vy[b] -= dy * bias; vx[a] += dx * (1 - bias); vy[a] += dy * (1 - bias)
     }
-    // group pull, gravity, depth
+    // group pull, gravity (toward the group's slot), depth (inside the group)
     const cx = new Float64Array(groups), cy = new Float64Array(groups), cnt = new Float64Array(groups)
     for (let i = 0; i < n; i++) { cx[seed.gi[i]] += x[i]; cy[seed.gi[i]] += y[i]; cnt[seed.gi[i]]++ }
     for (let i = 0; i < n; i++) {
       const g = seed.gi[i]
       vx[i] += (cx[g] / cnt[g] - x[i]) * P.clusterPull * alpha
       vy[i] += (cy[g] / cnt[g] - y[i]) * P.clusterPull * alpha
-      vx[i] -= x[i] * P.gravity * alpha  // d3 forceX/forceY toward the centre
-      vy[i] -= y[i] * P.gravity * alpha
+      // d3 forceX/forceY toward the centre; with several groups, toward this group's slot
+      if (P.depthMode !== 'horizontal') vx[i] += (ax[g] - x[i]) * P.gravity * alpha
+      if (P.depthMode !== 'vertical') vy[i] += (ay[g] - y[i]) * P.gravity * alpha
       if (P.depthMode !== 'off') {
-        const target = (seed.depth[i] - maxDepth / 2) * P.depthSpacing
-        if (P.depthMode === 'horizontal') vx[i] += (target - x[i]) * P.depthStrength * alpha
-        else vy[i] += (target - y[i]) * P.depthStrength * alpha
+        const target = local[i] * P.depthSpacing
+        if (P.depthMode === 'horizontal') vx[i] += (ax[g] + target - x[i]) * P.depthStrength * alpha
+        else vy[i] += (ay[g] + target - y[i]) * P.depthStrength * alpha
       }
     }
     for (let i = 0; i < n; i++) {
@@ -816,7 +1026,7 @@ export function createSim(seed, settings) {
   return S
 }
 
-const STORE_KEY = 'learnloop.graph.v1'
+const STORE_KEY = 'learnloop.graph.v2'  // v2: group slots + vertical depth; v1 positions no longer apply
 function loadGraphPrefs() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') } catch { return {} }
 }
@@ -828,6 +1038,7 @@ const SLIDERS = [
   ['charge', 'Repel', 0, 1500, 1], ['linkDistance', 'Link distance', 10, 200, 1], ['linkStrength', 'Link strength', 0, 2, 0.05],
   ['gravity', 'Gravity', 0, 0.5, 0.005], ['clusterPull', 'Group pull', 0, 0.2, 0.002], ['velocityDecay', 'Friction', 0.05, 0.9, 0.01],
   ['depthStrength', 'Depth pull', 0, 1.5, 0.05], ['depthSpacing', 'Depth spacing', 20, 250, 1],
+  ['groupSpacing', 'Group spacing', 0, 600, 5],
   ['nodeSize', 'Node size', 2, 12, 0.5], ['labelZoom', 'Names from zoom', 0.3, 4, 0.05]
 ]
 
@@ -844,9 +1055,12 @@ function PhysicsPanel({ settings, onChange, onReset }) {
       jsxs('label', { className: 'flex items-center justify-between text-xs', children: [jsx('span', { children: 'Depth' }),
         jsx('select', { value: settings.depthMode, onChange: e => onChange({ depthMode: e.target.value }),
           className: 'rounded-md border border-(--ui-stroke-secondary) bg-transparent px-1 text-xs', children: [
-            jsx('option', { value: 'horizontal', children: 'left → right' }, 'h'),
             jsx('option', { value: 'vertical', children: 'top → bottom' }, 'v'),
+            jsx('option', { value: 'horizontal', children: 'left → right' }, 'h'),
             jsx('option', { value: 'off', children: 'off (free)' }, 'o')] })] }),
+      jsxs('label', { className: 'flex items-center justify-between text-xs', children: [jsx('span', { children: 'Group regions' }),
+        jsx('input', { type: 'checkbox', checked: settings.regions !== false, onChange: e => onChange({ regions: e.target.checked }),
+          style: { accentColor: 'var(--ui-accent)' } })] }),
       ...SLIDERS.map(row),
       jsx('button', { type: 'button', onClick: onReset, className: 'self-start text-xs text-(--ui-text-tertiary) hover:text-(--ui-text-primary)',
         children: 'Reset to defaults' })
@@ -866,10 +1080,16 @@ function GraphView({ graph, height = 600, onOpenLesson, onPractice }) {
   const sim = useMemo(() => {
     const saved = loadGraphPrefs().positions || {}
     const seed = { ...L, x: Float64Array.from(L.x), y: Float64Array.from(L.y) }
-    const mid = (Math.max(0, ...L.depth) / 2) * PHYSICS_DEFAULTS.depthSpacing
+    const S0 = { ...PHYSICS_DEFAULTS, ...settings }
+    const { ax, ay, local } = groupAnchors(L, S0)
+    // start each fact in its group's slot: depth along the depth axis, the layered layout's order across it
+    const G = L.groups.length, my = new Float64Array(G), mc = new Float64Array(G)
+    props.forEach((p, i) => { my[L.gi[i]] += L.y[i]; mc[L.gi[i]]++ })
     let known = 0
     props.forEach((p, i) => {
-      seed.x[i] -= mid
+      const g = L.gi[i], d = local[i] * S0.depthSpacing, c = L.y[i] - my[g] / mc[g]
+      if (S0.depthMode === 'horizontal') { seed.x[i] = ax[g] + d; seed.y[i] = ay[g] + c }
+      else { seed.x[i] = ax[g] + c; seed.y[i] = ay[g] + d }
       const pos = saved[p.id]
       if (pos) { seed.x[i] = pos[0]; seed.y[i] = pos[1]; known++ }
     })
@@ -898,8 +1118,8 @@ function GraphView({ graph, height = 600, onOpenLesson, onPractice }) {
     if (!props.length || !v.w) return
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
     for (let i = 0; i < props.length; i++) { x0 = Math.min(x0, sim.x[i]); x1 = Math.max(x1, sim.x[i]); y0 = Math.min(y0, sim.y[i]); y1 = Math.max(y1, sim.y[i]) }
-    const pad = 50
-    v.k = Math.min(2.5, Math.min((v.w - pad * 2) / Math.max(1, x1 - x0), (v.h - pad * 2) / Math.max(1, y1 - y0)))
+    const pad = 50, padX = L.groups.length > 1 ? 150 : pad  // room for group names at the edges
+    v.k = Math.min(2.5, Math.min((v.w - padX * 2) / Math.max(1, x1 - x0), (v.h - pad * 2) / Math.max(1, y1 - y0)))
     v.tx = v.w / 2 - ((x0 + x1) / 2) * v.k
     v.ty = v.h / 2 - ((y0 + y1) / 2) * v.k
     dirty.current = true
@@ -968,13 +1188,25 @@ function GraphView({ graph, height = 600, onOpenLesson, onPractice }) {
     const lit = i => (match ? match[i] : true) && (focus < 0 || near.has(i))
     const hue = i => HUES[L.gi[i] % HUES.length]
     const r0 = settings.nodeSize * Math.min(1.6, Math.max(0.7, Math.sqrt(v.k)))
-    // regions: soft blobs per fact, in the group's colour
-    const rr = Math.max(22, 30 * v.k)
-    for (let i = 0; i < props.length; i++) {
-      const g = ctx.createRadialGradient(sx(i), sy(i), 0, sx(i), sy(i), rr)
-      g.addColorStop(0, `hsla(${hue(i)}, 60%, 55%, 0.12)`); g.addColorStop(1, `hsla(${hue(i)}, 60%, 55%, 0)`)
-      ctx.fillStyle = g
-      ctx.fillRect(sx(i) - rr, sy(i) - rr, rr * 2, rr * 2)
+    // regions (after LearnHarness's): a soft disc around every fact and a wide round-capped stroke along every
+    // link inside a group, in the group's colour, so each cluster reads as one patch (dilation 20 + blur 40)
+    if (settings.regions !== false && L.groups.length > 1) {
+      const rr = Math.max(18, 60 * v.k)
+      ctx.globalAlpha = 1
+      for (let i = 0; i < props.length; i++) {
+        const g = ctx.createRadialGradient(sx(i), sy(i), 0, sx(i), sy(i), rr)
+        g.addColorStop(0, `hsla(${hue(i)}, 60%, 55%, 0.16)`); g.addColorStop(0.45, `hsla(${hue(i)}, 60%, 55%, 0.08)`)
+        g.addColorStop(1, `hsla(${hue(i)}, 60%, 55%, 0)`)
+        ctx.fillStyle = g
+        ctx.fillRect(sx(i) - rr, sy(i) - rr, rr * 2, rr * 2)
+      }
+      ctx.lineCap = 'round'; ctx.lineWidth = Math.max(10, 40 * v.k)
+      for (const [s, t] of L.edges) {
+        if (L.gi[s] !== L.gi[t]) continue
+        ctx.strokeStyle = `hsla(${hue(s)}, 60%, 55%, 0.07)`
+        ctx.beginPath(); ctx.moveTo(sx(s), sy(s)); ctx.lineTo(sx(t), sy(t)); ctx.stroke()
+      }
+      ctx.lineCap = 'butt'
     }
     // edges with arrowheads (premise -> conclusion)
     for (const [s, t] of L.edges) {
@@ -1135,6 +1367,33 @@ function GraphView({ graph, height = 600, onOpenLesson, onPractice }) {
 }
 
 // ---------- Learn page (sidebar) ----------
+
+// A lesson on the Learn page: click to reopen its chat; lessons with a plan can show their full map here.
+function LessonCard({ ctx, l, open }) {
+  const [map, setMap] = useState(false)
+  const data = usePoll(ctx, map ? `/lesson?session=${encodeURIComponent(l.session_id)}` : null, 10000)
+  const plan = data && data.lesson && data.lesson.plan
+  const small = 'text-xs text-(--ui-text-tertiary) hover:text-(--ui-text-primary)'
+  return jsxs('div', { className: 'flex flex-col gap-2 rounded-md border border-(--ui-stroke-secondary) px-3 py-2 hover:border-(--ui-stroke-primary)', children: [
+    jsxs('div', { className: 'flex items-start gap-3', children: [
+      jsxs('button', { type: 'button', onClick: () => open(l), className: 'flex min-w-0 flex-1 flex-col gap-0.5 text-left', children: [
+        jsx('div', { className: 'text-sm font-medium', children: l.goal }),
+
+        jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: [
+            l.kind === 'practice' ? (l.phase === 'done' ? 'Practice · done' : 'Practice') : (PHASE_LABEL[l.phase] || l.phase),
+            l.steps ? `${l.reached}/${l.steps} steps` : null,
+            ...(l.kind === 'practice' ? [`${l.problems} problems (${l.solved} solved)`] : [`${l.answered} answered`, `${l.facts} facts`]),
+            when(l.updated_at)
+          ].filter(Boolean).join(' · ') })
+      ] }),
+      l.steps > 0 && jsx('button', { type: 'button', onClick: () => setMap(!map), className: small, children: map ? 'Hide map' : 'Map' })
+    ] }),
+    map && (plan ? jsxs('div', { className: 'flex flex-col gap-2', children: [jsx(PlanLegend, { plan }),
+      jsx('div', { style: { overflow: 'auto', maxHeight: '70vh' }, children: jsx(PlanMap, { plan }) })] })
+      : jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: 'Loading the map…' }))
+  ] })
+}
+
 function LearnPage({ ctx }) {
   const data = usePoll(ctx, '/lessons', 5000)
   const graph = usePoll(ctx, '/graph', 15000)
@@ -1161,19 +1420,7 @@ function LearnPage({ ctx }) {
     jsxs('section', { className: 'flex flex-col gap-2', children: [
       jsx(Label, { children: 'Lessons' }),
       lessons.length === 0 && jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'No lessons yet.' }),
-      ...lessons.map(l => jsxs('button', {
-        type: 'button', onClick: () => open(l),
-        className: 'flex flex-col gap-0.5 rounded-md border border-(--ui-stroke-secondary) px-3 py-2 text-left hover:border-(--ui-stroke-primary)',
-        children: [
-          jsx('div', { className: 'text-sm font-medium', children: l.goal }),
-          jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: [
-            l.kind === 'practice' ? (l.phase === 'done' ? 'Practice · done' : 'Practice') : (PHASE_LABEL[l.phase] || l.phase),
-            l.steps ? `${l.reached}/${l.steps} steps` : null,
-            ...(l.kind === 'practice' ? [`${l.problems} problems (${l.solved} solved)`] : [`${l.answered} answered`, `${l.facts} facts`]),
-            when(l.updated_at)
-          ].filter(Boolean).join(' · ') })
-        ]
-      }, l.id))
+      ...lessons.map(l => jsx(LessonCard, { ctx, l, open }, l.id))
     ] }),
     jsxs('section', { className: 'flex flex-col gap-2', children: [
       jsxs('div', { className: 'flex items-center gap-3', children: [

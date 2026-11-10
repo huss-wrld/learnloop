@@ -27,6 +27,9 @@ def test_lesson_view_teach_with_progress(teaching):
     assert [(n["id"], n["state"]) for n in v["plan"]["nodes"]] == [("dot", "current"), ("scores", "todo"),
                                                                     ("softmax", "todo")]
     assert v["plan"]["mermaid"].startswith("graph TD") and "class dot current" in v["plan"]["mermaid"]
+    # the Desktop map draws from nodes + edges itself (no Mermaid at pane width)
+    ids = {n["id"] for n in v["plan"]["nodes"]}
+    assert v["plan"]["edges"] and all(len(e) == 2 and set(e) <= ids for e in v["plan"]["edges"])
     assert v["assessment"]["summary"] == ASSESS["summary"]
 
 
