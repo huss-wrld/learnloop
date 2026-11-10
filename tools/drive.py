@@ -24,12 +24,25 @@ import sys
 import time
 from pathlib import Path
 
-PROFILE = "learnloop-test"
+# Development tool: Hermes never loads tools/. Point it at a throwaway profile (sessions run under that profile's
+# own approval settings) and at your Hermes checkout (the workspace holding agent/ and plugins/).
+PROFILE = os.environ.get("DRIVE_PROFILE", "learnloop-test")
 HOME = Path.home()
 PROFILE_HOME = HOME / ".hermes/profiles" / PROFILE
-RUNS = HOME / "Projects/learnloop-ref/runs"
-HERMES_WS = Path(os.environ.get(
-    "HERMES_WS", HOME / ".hermes/installs/e00cfdc438b1ed6d/environments/376dc4c4a21c40b4ab37e3ad15091b93/workspace"))
+RUNS = Path(os.environ.get("DRIVE_RUNS", HOME / "Projects/learnloop-ref/runs"))
+
+
+def _hermes_workspace() -> Path:
+    if os.environ.get("HERMES_WS"):
+        return Path(os.environ["HERMES_WS"])
+    found = [p.parent.parent for p in HOME.glob(".hermes/installs/*/environments/*/workspace/agent/skill_commands.py")
+             if (p.parent.parent.parent / "venv/bin/python").exists()]
+    # the environment updated most recently is the one Hermes runs
+    return max(found, key=lambda w: (w / "agent/skill_commands.py").stat().st_mtime) if found else \
+        HOME / ".hermes/hermes-agent"
+
+
+HERMES_WS = _hermes_workspace()
 TIMEOUT = 600
 
 

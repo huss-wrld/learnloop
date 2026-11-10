@@ -24,7 +24,7 @@ Every question records your answer, your confidence and your thinking. What you 
 
 ```bash
 hermes plugins install learnloop          # once it's listed in the catalog
-hermes plugins install Huss-Alamodi/learnloop   # straight from GitHub
+hermes plugins install huss-wrld/learnloop      # straight from GitHub
 ```
 
 Then, in Hermes Desktop, enable learnloop's Desktop part: **Capabilities → Plugins → learnloop → enable**, then **Rescan**. Each profile has its own switch. Without the Desktop part learnloop still works, with questions and problems as text.
@@ -107,7 +107,7 @@ hermes plugins validate .                           # catalog checks
 python3 tools/build_skill.py                        # regenerate skills/ after editing method/
 ```
 
-`tools/drive.py` runs scripted headless lessons against a test profile, and `tools/scorecard.py` scores them (questions typed by hand, grading order, teaching during the probe, the practice pause, tokens). The research behind the port is in [docs/research](docs/research).
+`tools/` and `tests/` are development aids; Hermes never loads them. `tools/drive.py` runs scripted headless lessons (`hermes chat` sessions) in a throwaway test profile you name with `DRIVE_PROFILE`, under that profile's own approval settings, and `tools/scorecard.py` scores them (questions typed by hand, grading order, teaching during the probe, the practice pause, tokens). The research behind the port is in [docs/research](docs/research).
 
 ## Credit and licence
 
