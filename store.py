@@ -58,6 +58,11 @@ class LearnError(ValueError):
     """Invalid request. The message goes back to the model or user verbatim, so keep it actionable."""
 
 
+def grade_first(q: dict) -> LearnError:
+    return LearnError(f"Question {q['id']} is still open: the learner's last message answers it. "
+                      "Call learn_grade first, then retry this call.")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -175,7 +180,7 @@ class Store:
     def require_lesson(self, session_id: str) -> dict:
         les = self.active_lesson(session_id)
         if les is None:
-            raise LearnError("No active lesson in this chat. The user starts one with /study <topic>.")
+            raise LearnError("No active lesson in this chat. The user starts one with /learnloop <topic>.")
         return les
 
     def start_lesson(self, session_id: str, goal: str) -> dict:
@@ -183,10 +188,10 @@ class Store:
         if not session_id:
             raise LearnError("No session id: a lesson can only start inside a chat.")
         if len(goal) < 4:
-            raise LearnError("Say what you want to learn, e.g. /study why attention divides by sqrt(d_k).")
+            raise LearnError("Say what you want to learn, e.g. /learnloop why attention divides by sqrt(d_k).")
         with self._tx():
             if self.active_lesson(session_id):
-                raise LearnError("This chat already has an active lesson. End it with /study stop first.")
+                raise LearnError("This chat already has an active lesson. End it with /learnloop stop first.")
             lesson_id, t = _new_id("l"), _now()
             self.conn.execute("INSERT INTO lessons(id, session_id, goal, phase, created_at, updated_at) "
                               "VALUES (?,?,?,?,?,?)", (lesson_id, session_id, goal, "probe", t, t))
@@ -222,8 +227,9 @@ class Store:
         if phase == "teach" and not (plan or les["plan"]):
             raise LearnError("Teaching needs a plan: store it with learn_phase(phase='plan', plan=...) "
                              "and present it first.")
-        if not same and self.open_question(les["id"]):
-            raise LearnError("A question is still open. Grade it with learn_grade first.")
+        open_q = None if same else self.open_question(les["id"])
+        if open_q:
+            raise grade_first(open_q)
         with self._tx():
             self.conn.execute(
                 "UPDATE lessons SET phase=?, plan=CASE WHEN ?='' THEN plan ELSE ? END, assessment=?, "
@@ -327,8 +333,9 @@ class Store:
             if len((expected or "").strip()) < 3:
                 raise LearnError("Free-answer questions need `expected`: your committed answer with its "
                                  "reasoning, written before the learner answers.")
-        if self.open_question(les["id"]):
-            raise LearnError("A question is already open. Wait for the learner's answer and call learn_grade.")
+        open_q = self.open_question(les["id"])
+        if open_q:
+            raise grade_first(open_q)
         question_id = _new_id("q")
         with self._tx():
             self.conn.execute(

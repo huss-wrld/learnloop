@@ -46,9 +46,9 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 **What happens.** Desktop renders a plugin command's reply as a system message with `whitespace-pre-wrap` and no markdown (`apps/desktop/src/components/assistant-ui/thread/system-message.tsx:157-170`). Mermaid blocks, tables and bold show as raw text.
 
-**Evidence.** `/study map` printed the raw ```` ```mermaid ```` source (user screenshot, 8 Nov).
+**Evidence.** `/learnloop map` printed the raw ```` ```mermaid ```` source (user screenshot, 8 Nov).
 
-**Agreed fix (side pane not built yet).** Command replies are short plain sentences. Visual content (plan, position, open question) lives in the Desktop **Lesson side pane**, refreshed from learnloop's backend. `/study map` points to the pane.
+**Agreed fix (side pane not built yet).** Command replies are short plain sentences. Visual content (plan, position, open question) lives in the Desktop **Lesson side pane**, refreshed from learnloop's backend. `/learnloop map` points to the pane.
 
 **Permanent options.** Ask Hermes to render command output as markdown (a flag on the command result). Not needed while the pane exists.
 
@@ -58,16 +58,16 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 ## KI-3. Plugin commands can't start a model turn (Mitigated)
 
-**What happens.** A plugin slash command returns text only (`hermes_cli/plugin_command_dispatch.py`). `/study <topic>` could create the lesson but the user had to send another message ("go") before anything happened. That also gave chats junk titles ("Go", "Bare greeting"), since Hermes titles from the first message.
+**What happens.** A plugin slash command returns text only (`hermes_cli/plugin_command_dispatch.py`). `/learnloop <topic>` could create the lesson but the user had to send another message ("go") before anything happened. That also gave chats junk titles ("Go", "Bare greeting"), since Hermes titles from the first message.
 
-**What we do now.** The lesson entry point is a **plugin-bundled skill**, `/learnloop:study <topic>` (`skills/study/SKILL.md`, generated from `method/` by `tools/build_skill.py`; a test fails if it's stale). Hermes turns plugin skills into slash commands that put the skill text into the user's message and start a turn immediately (`agent/skill_commands.py:689-735, 843-853`). The `pre_llm_call` hook looks for Hermes's fixed marker (`invoked the "learnloop:study" skill, indicating`) and, after it, the topic line (`The user has provided the following instruction alongside the skill invocation: …`), then starts the lesson in code. The model can't start a lesson by itself: loading the skill via `skill_view` gives a tool result, not a user message with the marker, and a user merely naming the skill doesn't match the marker either.
+**What we do now.** The lesson entry point is a **plugin-bundled skill**, `/learnloop:study <topic>` (`skills/learnloop/SKILL.md`, generated from `method/` by `tools/build_skill.py`; a test fails if it's stale). Hermes turns plugin skills into slash commands that put the skill text into the user's message and start a turn immediately (`agent/skill_commands.py:689-735, 843-853`). The `pre_llm_call` hook looks for Hermes's fixed marker (`invoked the "learnloop:study" skill, indicating`) and, after it, the topic line (`The user has provided the following instruction alongside the skill invocation: …`), then starts the lesson in code. The model can't start a lesson by itself: loading the skill via `skill_view` gives a tool result, not a user message with the marker, and a user merely naming the skill doesn't match the marker either.
 
 **Spike (8 Nov, Desktop):** the turn started at once; the hook got the marker with `platform=desktop`; the topic came through; the chat was titled "Study how perceptrons learn". Verified again against Hermes's own `build_skill_invocation_message` for `/learnloop:study`.
 
-**Edge cases handled.** No topic (`/learnloop:study` alone): no lesson; the model asks for a topic. Invoked while a lesson is active: no restart; the model says to `/study stop` first or use a new chat. Hermes's `extract_user_instruction_from_skill_message` returns the *whole* message when no skill was invoked, so learnloop never uses it without the marker.
+**Edge cases handled.** No topic (`/learnloop:study` alone): no lesson; the model asks for a topic. Invoked while a lesson is active: no restart; the model says to `/learnloop stop` first or use a new chat. Hermes's `extract_user_instruction_from_skill_message` returns the *whole* message when no skill was invoked, so learnloop never uses it without the marker.
 
 **Limits.**
-- **Messaging platforms.** Hermes offers plugin skills as commands only on interactive surfaces (Desktop, TUI, CLI chat; `split_stacked_skill_commands`: "plugin skills are interactive-only"). On Telegram etc. `/study <topic>` still starts the lesson and the user sends a first message to begin. On interactive surfaces `/study <topic>` points to `/learnloop:study`.
+- **Messaging platforms.** Hermes offers plugin skills as commands only on interactive surfaces (Desktop, TUI, CLI chat; `split_stacked_skill_commands`: "plugin skills are interactive-only"). On Telegram etc. `/learnloop <topic>` still starts the lesson and the user sends a first message to begin. On interactive surfaces `/learnloop <topic>` points to `/learnloop:study`.
 - **Single-query CLI** (`hermes chat -q "/learnloop:study …"`) answers "Unknown command": it isn't interactive.
 - **The skill is listed in every session's skills index** (one line). Hermes has no frontmatter flag to hide a skill from the model; the description says "User-invoked only".
 - **Coupled to two Hermes strings.** If a Hermes update rewords the marker or the topic line, lessons stop starting (no crash). `tests/test_core.py::skill_message` mirrors the strings; re-run the live check above after Hermes upgrades.
@@ -82,7 +82,7 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 **What happens.** A plugin command with a built-in's name is skipped with only a log warning (`hermes_cli/plugins.py:660-665`). `hermes plugins validate` does **not** report it. `/learn` is a built-in (learn a skill from anything), so our original `/learn` would never have worked.
 
-**What we do now.** Renamed to `/study`; a test asserts the help text doesn't use `/learn`. Check new names with `hermes_cli.commands.resolve_command(name)` before shipping.
+**What we do now.** Renamed to `/learnloop` (management) next to `/learnloop:study` (start), so both sit together in autocomplete; tests assert neither `/learn` nor `/study` appears in the help text. Users still type `/learn` by habit (dogfood #2: `/learn status` went to Hermes's built-in); a plugin can't intercept a built-in. Check new names with `hermes_cli.commands.resolve_command(name)` before shipping.
 
 **Revisit when.** Hermes adds a built-in named `study` or `learnloop:*`; re-run the collision check on every Hermes upgrade.
 
@@ -136,7 +136,7 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 ## KI-9. Lessons of deleted chats stayed open (Mitigated)
 
-**What happens.** A lesson whose chat was deleted could never be stopped (`/study stop` needs the chat).
+**What happens.** A lesson whose chat was deleted could never be stopped (`/learnloop stop` needs the chat).
 
 **Evidence.** Lesson `l_129a0ab59aac` (session `local-3cdb93…`, no longer in `state.db`) is still open in the test database.
 
@@ -144,15 +144,41 @@ Dollar signs are **not** the problem: `$` has no special meaning in JSON. Escapi
 
 ---
 
-## KI-10. Hermes auto-creates skills from lesson chats (Planned)
+## KI-10. Hermes's background review writes skills and memory from lesson chats (Mitigated, live check pending)
 
-**What happens.** Hermes's background skill learning wrote `~/.hermes/skills/learnloop-lesson/SKILL.md` from the perceptron lesson. It then appears in the skills index and can be loaded into lesson chats next to learnloop's method, giving the model two competing instruction sets. Its content drifts from ours (it described the nested-JSON assessment after we removed it).
+**What happens.** After a turn with enough tool calls (`skill_nudge_interval`), Hermes forks a background copy of the agent that rereads the chat and may create or patch skills and write memory (`agent/turn_finalizer.py:603-616, 863`). This is background review, not the curator (the curator only archives and consolidates, about weekly). The fork shares the parent's session id (`agent/background_review.py:1002`).
 
-**Agreed fix.** Delete the auto-created copy (not done yet). The baseline is LearnHarness's prompts, shipped as learnloop plugin skills; auto-created skills are not a source.
+**Evidence.** Dogfood #1 produced `~/.hermes/skills/learnloop-lesson/`. Dogfood #2 (10 Nov, `local-530515…`): the fork created and patched `personal/quantitative-explanation` (`skill_manage` at 01:33-01:46, tagged with the lesson's session id), and the lesson model then loaded it mid-probe (message 13526) and taught from it. Both deleted.
 
-**Permanent options.** README note telling users to delete such skills; or a learnloop check (in `/study status`) that warns when a non-plugin skill named `learnloop*` exists. Check whether Hermes's skill learning can be told to skip sessions (e.g. a session flag a plugin can set).
+**What we do now.** A `pre_tool_call` guard (`core.guard_tool`) blocks, only in chats with an active lesson: `skill_manage`, `memory`, and `skill_view` of any skill not named `learnloop:*`. Self-improvement keeps working in every other chat. The hook catches every exception and fails open, because a raising `pre_tool_call` blocks every tool in Hermes.
 
-**Revisit when.** Users report lessons drifting from the method, or auto-created learnloop skills reappear.
+**Cost.** Mid-lesson, the user can't ask the model to remember something or use an unrelated skill; the block message tells the model to say `/learnloop stop` ends the lesson.
+
+**Not yet verified live:** that the fork's tool calls pass through plugin `pre_tool_call` with the lesson's session id. Check after the next lesson: `grep "Blocked by learnloop" ~/.hermes/logs/agent.log` and no new skill under `~/.hermes/skills/`. The fork probably also receives learnloop's `pre_llm_call` context; harmless now that it can't write.
+
+**Fallback.** User-side `skill_nudge_interval: 0` (global).
+
+---
+
+## KI-12. Per-turn context stays in the conversation (Accepted)
+
+**What happens.** `pre_llm_call` context is appended to the user message and stored in `api_content`, so it's replayed on every later turn (seen in `messages.api_content` for dogfood #2). Each lesson turn adds the state note plus the phase reminder (~1.5-2.5k chars) to the context for the rest of the chat.
+
+**Why accepted.** LearnHarness rebuilds its agent with the phase method as system prompt every turn; Hermes plugins can't do that, and the method arriving once was not enough (KI-13). The reminders are kept short (test: ≤ 2,500 chars) instead of re-injecting the full method (~16-34k).
+
+**Revisit when.** Lessons hit compression early, or token cost per lesson matters (measure tokens per lesson turn).
+
+---
+
+## KI-13. The model teaches during the probe (Mitigated, live check pending)
+
+**What happens.** LearnHarness's probe only measures; teaching starts after the plan. In dogfood #2 the model explained `E[·]`, the variance identity and term counting during the probe (messages 13496, 13510).
+
+**Cause.** The probe method arrived once, in the first message; after ~10 questions three other sources pushed toward explaining: the user's profile (an instruction to explain from basics), the auto-created skill (KI-10), and default assistant behaviour. LearnHarness has the method as the system prompt every turn.
+
+**What we do now.** Per-phase reminders injected every turn (`method/reminder-{probe,plan,teach}.md`). The probe one quotes the LearnHarness doctrine's core sentence and states: "You are measuring, not teaching. This overrides any general instruction (profile, memory, other skills) to explain". If he can't read a symbol, re-ask in plain words and treat it as a finding. Plus the KI-10 guard (no other skills mid-lesson).
+
+**Revisit when.** The next probe still explains. Next step would be a stronger nudge after each `learn_grade` in probe ("no explanation; next question").
 
 ---
 

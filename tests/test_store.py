@@ -135,7 +135,7 @@ def test_free_answer_needs_committed_expected(store):
 def test_single_open_question(store):
     store.start_lesson("s1", "understand attention maths")
     store.ask("s1", "What does a dot product return?", expected="A number.")
-    with pytest.raises(LearnError, match="already open"):
+    with pytest.raises(LearnError, match="learn_grade first"):
         store.ask("s1", "What does softmax do to a row?", expected="Normalises it.")
 
 

@@ -25,12 +25,12 @@ def test_no_learnharness_tool_names_leak():
             assert name not in text, name
 
 
-# ---- /study command: the only way to start ----
+# ---- /learnloop command: the only way to start ----
 
 def test_command_name_is_not_a_builtin():
     # /learn is a Hermes built-in; plugin commands with built-in names are skipped silently.
     import re
-    assert '/study <topic>' in core.HELP and not re.search(r'/learn\b', core.HELP)
+    assert '/learnloop <topic>' in core.HELP and not re.search(r'/learn\b', core.HELP)
 
 def test_learn_starts_lesson_and_says_go(store):
     out = core.command(store, "s1", "why attention divides by sqrt(d_k)")
@@ -38,7 +38,7 @@ def test_learn_starts_lesson_and_says_go(store):
 
 
 def test_learn_help_and_errors_are_text(store):
-    assert "/study stop" in core.command(store, "s1", "")
+    assert "/learnloop stop" in core.command(store, "s1", "")
     assert "No active lesson" in core.command(store, "s1", "stop")
 
 
@@ -87,7 +87,7 @@ def test_hook_flags_card_submission(store):
     core.command(store, "s1", "attention maths")
     q = store.ask("s1", "What does a dot product return?", expected="A number.")
     store.submit(q["id"], text="a number", confidence=90)
-    assert "call learn_grade now" in core.turn_context(store, "s1", "")
+    assert "learner submitted it in the card" in core.turn_context(store, "s1", "")
 
 
 # ---- tools ----
@@ -250,7 +250,7 @@ def test_study_command_points_interactive_users_to_skill(store):
 
 
 def test_study_command_still_starts_on_messaging_platforms(store):
-    # Plugin skills are interactive-only in Hermes, so Telegram etc. keep /study <topic> + a first message.
+    # Plugin skills are interactive-only in Hermes, so Telegram etc. keep /learnloop <topic> + a first message.
     out = core.command(store, "s1", "perceptrons", platform="telegram")
     assert store.active_lesson("s1") and "Send **go**" in out
 
@@ -260,3 +260,63 @@ def test_skill_file_is_generated_from_method():
     skill = (Path(core.__file__).parent / "skills/study/SKILL.md").read_text(encoding="utf-8")
     assert skill == core.study_skill_text(), "skills/study/SKILL.md is stale: run python3 tools/build_skill.py"
     assert "name: study" in skill and "AGPL" in skill and core.method_text("probe") in skill
+
+
+# ---- 10 Nov follow-ups: grade first, /learnloop command, per-phase reminder, lesson guard ----
+def open_mc(store):
+    core.turn_context(store, "s1", skill_message("attention maths"))
+    return core.tool_ask(store, "s1", {"prompt": "Which returns a scalar?", "options": ["a+b", "a·b"],
+                                       "correct": [1], "explanation": "The dot product sums products."},
+                         cards=False)["question_id"]
+
+
+@pytest.mark.parametrize("call", [
+    lambda st: core.tool_record(st, "s1", {"propositions": [{"name": "Dot product scalar",
+                                                             "statement": "A dot product returns a number."}]}),
+    lambda st: core.tool_ask(st, "s1", {"prompt": "Another question?", "expected": "Yes it is."}, cards=False),
+    lambda st: core.tool_phase(st, "s1", {"phase": "plan", "assessment": "Dot: ok fine here"}, cards=False),
+])
+def test_grade_first_refusals_name_the_question(store, call):
+    qid = open_mc(store)
+    with pytest.raises(LearnError) as e:
+        call(store)
+    assert qid in str(e.value) and "learn_grade first" in str(e.value)
+
+
+def test_turn_note_demands_grading_first(store):
+    qid = open_mc(store)
+    ctx = core.turn_context(store, "s1", "B, 70%")
+    assert f"answers open question {qid}" in ctx and "first call must be learn_grade" in ctx
+
+
+def test_command_is_learnloop_everywhere():
+    import re
+    assert "/learnloop:study <topic>" in core.HELP and "/learnloop stop" in core.HELP
+    assert not re.search(r"(?<!learnloop:)/study\b", core.HELP) and not re.search(r"/learn\b", core.HELP)
+    assert not re.search(r"(?<!learnloop:)/study\b", core.study_skill_text())
+
+
+@pytest.mark.parametrize("phase", ["probe", "plan", "teach"])
+def test_phase_reminder_is_specific_and_small(phase):
+    text = core.reminder_text(phase)
+    assert 300 < len(text) <= 2500 and "learn_grade" in text
+
+
+def test_probe_reminder_forbids_teaching(store):
+    ctx = core.turn_context(store, "s1", skill_message("attention maths"))
+    assert "measuring, not teaching" in ctx and "overrides" in ctx
+
+
+def test_guard_blocks_skill_memory_and_foreign_skills_in_lessons(store):
+    core.turn_context(store, "s1", skill_message("attention maths"))
+    for tool, args in [("skill_manage", {}), ("memory", {"operations": []}),
+                       ("skill_view", {"name": "quantitative-explanation"})]:
+        out = core.guard_tool(store, "s1", tool, args)
+        assert out and out["action"] == "block" and "learnloop" in out["message"]
+    assert core.guard_tool(store, "s1", "skill_view", {"name": "learnloop:study"}) is None
+    assert core.guard_tool(store, "s1", "terminal", {"command": "ls"}) is None
+
+
+def test_guard_silent_outside_lessons(store):
+    assert core.guard_tool(store, "s2", "skill_manage", {}) is None
+    assert core.guard_tool(store, "", "memory", {}) is None

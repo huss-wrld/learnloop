@@ -1,4 +1,4 @@
-"""learnloop behaviour: tool handlers, the /study command and the per-turn hook.
+"""learnloop behaviour: tool handlers, the /learnloop command and the per-turn hook.
 
 Pure functions over a Store, so everything here is testable without Hermes.
 Copyright (C) 2026 Hussein Al-Amodi. AGPL-3.0-only.
@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .store import CONFIDENCE_STOPS, LETTERS, LearnError, Store
+from .store import CONFIDENCE_STOPS, LETTERS, LearnError, Store, grade_first
 
 METHOD_DIR = Path(__file__).parent / "method"
 METHOD_BUDGET = 36_000  # spike U7: a 40k tool result arrived intact; keep headroom
@@ -41,8 +41,9 @@ def method_text(phase: str) -> str:
     return text
 
 
-def reminder_text() -> str:
-    return _strip_header((METHOD_DIR / "reminder.md").read_text(encoding="utf-8"))
+def reminder_text(phase: str) -> str:
+    """Short per-phase rules injected on every lesson turn (the full method arrives once; see KI-12)."""
+    return _strip_header((METHOD_DIR / f"reminder-{phase}.md").read_text(encoding="utf-8"))
 
 
 def study_skill_text() -> str:
@@ -180,13 +181,16 @@ def tool_method(store: Store, session_id: str, args: dict) -> dict:
 
 
 def tool_record(store: Store, session_id: str, args: dict) -> dict:
-    store.require_lesson(session_id)
+    les = store.require_lesson(session_id)
+    open_q = store.open_question(les["id"])
+    if open_q:  # record only what a graded answer showed (dogfood #2: recorded before grading)
+        raise grade_first(open_q)
     return store.record(session_id, args.get("propositions"), args.get("chains"))
 
 
 def tool_recall(store: Store, session_id: str, args: dict) -> dict:
     if store.active_lesson(session_id) is None and store.get_setting("recall", "off") != "on":
-        raise LearnError("learnloop recall is off outside lessons. The user can turn it on with /study recall on.")
+        raise LearnError("learnloop recall is off outside lessons. The user can turn it on with /learnloop recall on.")
     hits = store.search(args.get("query", ""), limit=min(int(args.get("limit") or RECALL_LIMIT), 20))
     return {"facts": [{"name": h["name"], "statement": h["statement"], "from": h["premises"]} for h in hits]}
 
@@ -214,6 +218,33 @@ def on_chat_deleted(store: Store, session_id: str) -> None:
         store.stop_lesson(session_id)
 
 
+# ---------- lesson guard (pre_tool_call) ----------
+GUARDED = {
+    "skill_manage": "skills aren't created or edited during a learnloop lesson (Hermes's background review "
+                    "would turn the lesson into competing teaching instructions)",
+    "memory": "memory isn't written during a learnloop lesson; the lesson's findings live in learnloop's graph",
+}
+
+
+def guard_tool(store: Store, session_id: str, tool_name: str, args: dict) -> dict | None:
+    """Block tools that would pull a lesson off the method (dogfood #2: a background review wrote a teaching
+    skill mid-lesson and the model loaded it). Only in chats with an active lesson."""
+    if tool_name not in GUARDED and tool_name != "skill_view":
+        return None
+    if not session_id or store.active_lesson(session_id) is None:
+        return None
+    if tool_name == "skill_view":
+        name = str((args or {}).get("name") or "")
+        if name.startswith("learnloop:"):
+            return None
+        reason = ("other skills aren't loaded during a learnloop lesson: the learnloop method is the only "
+                  "teaching method here")
+    else:
+        reason = GUARDED[tool_name]
+    return {"action": "block", "message": f"Blocked by learnloop: {reason}. The user can end the lesson with "
+                                          "/learnloop stop."}
+
+
 # ---------- per-turn hook ----------
 def turn_context(store: Store, session_id: str, user_message: str) -> str | None:
     topic = skill_invocation(user_message)
@@ -226,7 +257,7 @@ def turn_context(store: Store, session_id: str, user_message: str) -> str | None
         les = store.active_lesson(session_id)
         if les:
             return (f"[learnloop] This chat already has an active lesson ({les['goal']}), so no new one was "
-                    "started. Tell the user to end it with /study stop first, or start the new topic in a new "
+                    "started. Tell the user to end it with /learnloop stop first, or start the new topic in a new "
                     "chat. Continue the current lesson otherwise.")
         try:
             store.start_lesson(session_id, topic)
@@ -242,16 +273,18 @@ def turn_context(store: Store, session_id: str, user_message: str) -> str | None
                          "Begin now.")
         elif les["phase"] == "probe" and not store.answers(les["id"]) and open_q is None:
             state.append("If the probe method is no longer in the conversation, call learn_method first.")
-        if open_q:
-            state.append(f"Open question {open_q['id']}: {open_q['prompt'][:300]}"
-                         + (" (the learner submitted it in the card: call learn_grade now)"
-                            if open_q["submission"] else ""))
+        if open_q and (open_q["submission"] or (user_message or "").strip()):
+            how = "the learner submitted it in the card" if open_q["submission"] else "this message"
+            state.append(f"The user's message answers open question {open_q['id']} ({how}): your first call "
+                         f"must be learn_grade. Question: {open_q['prompt'][:300]}")
+        elif open_q:
+            state.append(f"Open question {open_q['id']}: {open_q['prompt'][:300]}")
         if les["plan"]:
             st = store.plan_status(les["id"])
             nxt = [n for n in st["nodes"] if n not in st["visited"]][:3]
             state.append(f"Plan position: current={st['current'] or 'none'}; visited={len(st['visited'])}/"
                          f"{len(st['nodes'])}; next unvisited: {', '.join(nxt) or 'none'}.")
-        return "\n".join(state) + "\n\n" + reminder_text()
+        return "\n".join(state) + "\n\n" + reminder_text(les["phase"])
     if store.get_setting("recall", "off") == "on":
         hits = store.search(user_message or "", limit=RECALL_LIMIT)
         if hits:
@@ -262,18 +295,18 @@ def turn_context(store: Store, session_id: str, user_message: str) -> str | None
     return None
 
 
-# ---------- /study command ----------
+# ---------- /learnloop command ----------
 HELP = """learnloop: structured lessons that stay in this chat only.
 
 - `/learnloop:study <topic>`: start a lesson in this chat (probe → plan → teach)
-- `/study <topic>`: same, on messaging platforms (then send any message to begin)
-- `/study stop`: end it
-- `/study status`: this chat's lesson and your graph size
-- `/study map`: the lesson plan with your position
-- `/study graph [words]`: what you've learned (search with words)
-- `/study recall on|off`: let other chats use what you've learned (off by default)
-- `/study cards on|off`: answer cards in Hermes Desktop (on by default)
-- `/study import <LearnHarness data dir>`: import a LearnHarness knowledge graph"""
+- `/learnloop <topic>`: same, on messaging platforms (then send any message to begin)
+- `/learnloop stop`: end it
+- `/learnloop status`: this chat's lesson and your graph size
+- `/learnloop map`: the lesson plan with your position
+- `/learnloop graph [words]`: what you've learned (search with words)
+- `/learnloop recall on|off`: let other chats use what you've learned (off by default)
+- `/learnloop cards on|off`: answer cards in Hermes Desktop (on by default)
+- `/learnloop import <LearnHarness data dir>`: import a LearnHarness knowledge graph"""
 
 
 def command(store: Store, session_id: str, raw: str, platform: str = "") -> str:
@@ -305,10 +338,10 @@ def command(store: Store, session_id: str, raw: str, platform: str = "") -> str:
             return _import(store, Path(rest).expanduser())
         if platform in INTERACTIVE_PLATFORMS:
             return (f"Start lessons with /learnloop:study {raw} (it begins right away). "
-                    "/study handles stop, status, graph, recall and import.")
+                    "/learnloop handles stop, status, graph, recall and import.")
         les = store.start_lesson(session_id, raw)
         return (f"Lesson started in this chat: *{les['goal']}*.\n\nFirst I'll find out what you already know, "
-                "then propose a plan. Send **go** to begin. `/study stop` ends it anytime.")
+                "then propose a plan. Send **go** to begin. `/learnloop stop` ends it anytime.")
     except LearnError as e:
         return str(e)
 
@@ -325,7 +358,7 @@ def _status(store: Store, session_id: str) -> str:
             st = store.plan_status(les["id"])
             lines.append(f"**Plan:** {len(st['visited'])}/{len(st['nodes'])} steps reached")
     else:
-        lines.append("No lesson in this chat. Start one with `/study <topic>`.")
+        lines.append("No lesson in this chat. Start one with `/learnloop <topic>`.")
     lines.append(f"**Your graph:** {s['propositions']} facts, {s['chains']} reasoning links, "
                  f"{s['lessons']} lessons. Recall in other chats: **{store.get_setting('recall', 'off')}**.")
     return "\n\n".join(lines)
@@ -334,7 +367,7 @@ def _status(store: Store, session_id: str) -> str:
 def _graph(store: Store, words: str) -> str:
     props = store.search(words, limit=10) if words else store.recent_props(10)
     if not props:
-        return "Nothing matches." if words else "Your graph is empty. Start a lesson with `/study <topic>`."
+        return "Nothing matches." if words else "Your graph is empty. Start a lesson with `/learnloop <topic>`."
     head = f"Facts matching *{words}*:" if words else "Your 10 most recent facts:"
     return head + "\n\n" + "\n".join(f"- **{p['name']}**: {p['statement']}" for p in props)
 

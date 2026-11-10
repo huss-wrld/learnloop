@@ -1,6 +1,6 @@
 """learnloop: structured lessons inside Hermes, with a knowledge graph shared across chats.
 
-Inert until the user runs /study <topic> in a chat. Teaching method adapted from LearnHarness
+Inert until the user runs /learnloop <topic> in a chat. Teaching method adapted from LearnHarness
 (see NOTICE). Copyright (C) 2026 Hussein Al-Amodi. AGPL-3.0-only.
 """
 from __future__ import annotations
@@ -118,12 +118,20 @@ def register(ctx):
         except Exception as exc:  # noqa: BLE001
             log.warning("learnloop: ending a deleted chat's lesson failed: %s", exc)
 
+    def pre_tool_call(tool_name="", args=None, session_id="", task_id="", **_):
+        try:
+            return core.guard_tool(get_store(), session_id or task_id or "", tool_name, args or {})
+        except Exception as exc:  # noqa: BLE001 - a raising pre_tool_call blocks EVERY tool: fail open
+            log.warning("learnloop: lesson guard failed: %s", exc)
+            return None
+
+    ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("transform_llm_output", transform_llm_output)
     ctx.register_hook("on_session_delete", on_session_delete)
 
     def study_command(raw_args, session_id="", platform="", **_):
         return core.command(get_store(), session_id or _session_id({}), raw_args, platform=platform or "")
 
-    ctx.register_command("study", study_command,
+    ctx.register_command("learnloop", study_command,
                          description="Start or manage a learnloop lesson in this chat",
                          args_hint="<topic> | stop | status | map | graph | recall on|off")
