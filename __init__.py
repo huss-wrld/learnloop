@@ -62,6 +62,18 @@ def _follow_compression(store: Store, session_id: str) -> None:
         log.debug("learnloop: compression lookup failed: %s", exc)
 
 
+def _last_assistant_text(history) -> str:
+    """Text of the most recent assistant message in the hook's conversation_history (role/content dicts)."""
+    for msg in reversed(history or []):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, list):  # content blocks
+                content = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+            if (content or "").strip():
+                return str(content)
+    return ""
+
+
 def _tool(fn, needs_cards=False):
     def handler(args, **kwargs):
         sid = _session_id(kwargs)
@@ -81,7 +93,7 @@ def register(ctx):
                        description="User-invoked only: /learnloop:study <topic> starts a learnloop lesson.")
     handlers = {
         "learn_ask": _tool(core.tool_ask, needs_cards=True),
-        "learn_grade": _tool(core.tool_grade),
+        "learn_grade": _tool(core.tool_grade, needs_cards=True),
         "learn_phase": _tool(core.tool_phase, needs_cards=True),
         "learn_method": _tool(core.tool_method),
         "learn_record": _tool(core.tool_record),
@@ -91,13 +103,14 @@ def register(ctx):
         ctx.register_tool(name=schema["name"], toolset=TOOLSET, schema=schema,
                           handler=handlers[schema["name"]], emoji="🎓")
 
-    def pre_llm_call(session_id="", user_message="", platform="", **_):
+    def pre_llm_call(session_id="", user_message="", platform="", conversation_history=None, **_):
         try:
             if platform:
                 _platforms[session_id] = platform
             store = get_store()
             _follow_compression(store, session_id)
-            text = core.turn_context(store, session_id, user_message or "")
+            text = core.turn_context(store, session_id, user_message or "",
+                                     last_reply=_last_assistant_text(conversation_history))
         except Exception as exc:  # noqa: BLE001 - a plugin must never break the turn
             log.warning("learnloop: turn context failed: %s", exc)
             return None

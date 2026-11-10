@@ -6,6 +6,7 @@ Copyright (C) 2026 Hussein Al-Amodi. AGPL-3.0-only.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from .store import CONFIDENCE_STOPS, LETTERS, LearnError, Store, grade_first
@@ -85,8 +86,30 @@ def skill_invocation(message: str) -> str | None:
 def cards_enabled(store: Store, platform: str) -> bool:
     """Cards only where they render: a Desktop chat, with the Desktop half seen at least once
     (it pings on load), and not switched off by the user. Everyone else gets text mode."""
-    return (platform == "desktop" and store.get_setting("desktop_ui") == "seen"
-            and store.get_setting("cards", "on") == "on")
+    mode = store.get_setting("cards", "on")
+    if mode == "force":  # test profiles: cards even in headless/CLI runs
+        return True
+    return platform == "desktop" and store.get_setting("desktop_ui") == "seen" and mode == "on"
+
+
+ASK_NEXT = "Create the next question with learn_ask; never type a question yourself."
+
+
+def card_answer_line(q: dict) -> str:
+    """The chat message a card sends after submitting: readable for the learner, a nudge for the model."""
+    sub = q["submission"] or {}
+    if sub.get("dont_know"):
+        head = "I don't know"
+    elif q["options"]:
+        head = ", ".join(f"{LETTERS[i]}) {q['options'][i]}" for i in sub.get("choices", []))
+    else:
+        head = sub.get("text", "")
+    parts = [head[:600]]
+    if sub.get("confidence") is not None:
+        parts.append(f"confidence {sub['confidence']}%")
+    if sub.get("thinking"):
+        parts.append(f"thinking: {sub['thinking'][:400]}")
+    return " · ".join(parts)
 
 
 def question_show(q: dict, cards: bool) -> str:
@@ -128,7 +151,7 @@ def tool_ask(store: Store, session_id: str, args: dict, cards: bool) -> dict:
             "next": how + " When the answer arrives, call learn_grade first."}
 
 
-def tool_grade(store: Store, session_id: str, args: dict) -> dict:
+def tool_grade(store: Store, session_id: str, args: dict, cards: bool = False) -> dict:
     les = store.require_lesson(session_id)
     open_q = store.open_question(les["id"])
     if open_q is None:
@@ -142,12 +165,25 @@ def tool_grade(store: Store, session_id: str, args: dict) -> dict:
         out["explanation"] = g["explanation"]
     else:
         out["expected"] = g["expected"]
-    confident_miss = g["verdict"] in ("wrong", "partial") and (g["confidence"] or 0) >= 70
-    out["next"] = (
-        "Confident miss: a firmly held wrong model. Name the wrong model from the answer and thinking, "
-        "repair it, re-check before moving on." if confident_miss else
-        "Read the thinking, not only the verdict. If it landed, record it with learn_record and continue; "
-        "if not, repair and re-check.")
+    missed = g["verdict"] in ("wrong", "partial", "dont_know")
+    confident_miss = missed and (g["confidence"] or 0) >= 70
+    step_down = ("Don't explain the answer. Ask a smaller question one rung below the miss, at the edge of what "
+                 "he holds, and build back up until he answers the original himself; explain only a concept he "
+                 "demonstrably lacks, briefly, from what he already holds.")
+    if les["phase"] == "probe":
+        out["next"] = "Probe: record the finding and choose the next question from it; no teaching."
+    elif confident_miss:
+        out["next"] = ("Confident miss: a firmly held wrong model. Find it in his answer and thinking, then make it "
+                       "visible to him with a question that breaks it. " + step_down)
+    elif missed:
+        out["next"] = "Read the thinking to find the smallest piece he can't do. " + step_down
+    else:
+        out["next"] = ("Read the thinking, not only the verdict: a right answer with thin reasoning or low confidence "
+                       "hasn't landed. If it landed, record it with learn_record and continue.")
+    if cards and g["options"]:
+        out["next"] += (" The card already showed him the verdict and the correct option, with the explanation "
+                        "behind a Why toggle: don't restate them.")
+    out["next"] += " " + ASK_NEXT
     return out
 
 
@@ -167,7 +203,7 @@ def tool_phase(store: Store, session_id: str, args: dict, cards: bool) -> dict:
         out["next"] = ("Present the plan: end your message with `map` as its own paragraph, ask if it fits, "
                        "and wait. When he agrees, call learn_phase(phase='teach').")
     elif before == "plan":
-        out["next"] = "Teach the first node."
+        out["next"] = "Teach the first node. " + ASK_NEXT
     else:
         out["next"] = "Plan revised; carry on without re-presenting it."
     if PHASE_FILES[les["phase"]] != PHASE_FILES[before]:
@@ -185,7 +221,9 @@ def tool_record(store: Store, session_id: str, args: dict) -> dict:
     open_q = store.open_question(les["id"])
     if open_q:  # record only what a graded answer showed (dogfood #2: recorded before grading)
         raise grade_first(open_q)
-    return store.record(session_id, args.get("propositions"), args.get("chains"))
+    out = store.record(session_id, args.get("propositions"), args.get("chains"))
+    out["next"] = ASK_NEXT
+    return out
 
 
 def tool_recall(store: Store, session_id: str, args: dict) -> dict:
@@ -246,7 +284,10 @@ def guard_tool(store: Store, session_id: str, tool_name: str, args: dict) -> dic
 
 
 # ---------- per-turn hook ----------
-def turn_context(store: Store, session_id: str, user_message: str) -> str | None:
+TYPED_QUESTION = re.compile(r"\*\*Question\.\*\*|Reply with (the letter|your answer)")
+
+
+def turn_context(store: Store, session_id: str, user_message: str, last_reply: str = "") -> str | None:
     topic = skill_invocation(user_message)
     started = False
     if topic is not None:
@@ -273,6 +314,11 @@ def turn_context(store: Store, session_id: str, user_message: str) -> str | None
                          "Begin now.")
         elif les["phase"] == "probe" and not store.answers(les["id"]) and open_q is None:
             state.append("If the probe method is no longer in the conversation, call learn_method first.")
+        if open_q is None and not started and TYPED_QUESTION.search(last_reply or ""):
+            state.append("Your last reply contained a question typed by hand, not created with learn_ask, so "
+                         "it has no answer key and nothing recorded the learner's answer. Respond to his answer "
+                         "in prose this once; if the step needs a graded check, ask it again with learn_ask. "
+                         "Never type a question yourself.")
         if open_q and (open_q["submission"] or (user_message or "").strip()):
             how = "the learner submitted it in the card" if open_q["submission"] else "this message"
             state.append(f"The user's message answers open question {open_q['id']} ({how}): your first call "

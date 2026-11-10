@@ -349,7 +349,7 @@ class Store:
                thinking="", reading_thinking="") -> dict:
         """Store the learner's own answer (from the Desktop card). learn_grade reads it later."""
         q = self.question(question_id)
-        if q["status"] != "open":
+        if q["status"] != "open" or q["submission"] is not None:
             raise LearnError("This question was already answered.")
         sub = _validate_answer(q, choices, text, dont_know, confidence)
         sub.update(thinking=(thinking or "").strip()[:8000], reading_thinking=(reading_thinking or "").strip()[:8000])
@@ -357,6 +357,29 @@ class Store:
             self.conn.execute("UPDATE questions SET submission=? WHERE id=?",
                               (json.dumps(sub, ensure_ascii=False), question_id))
         return self.question(question_id)
+
+    def public_question(self, question_id: str) -> dict:
+        """What the learner's card may see. The answer key, explanation and expected answer appear only
+        after the learner answered: for multiple choice at submission, for free answers once graded."""
+        q = self.question(question_id)
+        out = {k: q[k] for k in ("id", "prompt", "options", "status", "qtype", "node_id", "submission")}
+        out["kind"] = "mc" if q["options"] else "free"
+        out["multi"] = len(q["correct"]) > 1
+        sub = q["submission"]
+        if q["status"] == "answered":
+            out["submission"] = sub or {"choices": [], "text": q["answer"] or "", "dont_know": bool(q["dont_know"]),
+                                        "confidence": q["confidence"], "thinking": q["thinking"] or "",
+                                        "reading_thinking": q["reading_thinking"] or ""}
+        if q["options"] and (sub is not None or q["status"] == "answered"):
+            if q["status"] == "answered":
+                verdict = q["verdict"]
+            else:
+                verdict = "dont_know" if sub["dont_know"] else (
+                    "correct" if sorted(sub["choices"]) == q["correct"] else "wrong")
+            out["result"] = {"verdict": verdict, "correct": q["correct"], "explanation": q["explanation"]}
+        elif not q["options"] and q["status"] == "answered":
+            out["result"] = {"verdict": q["verdict"], "expected": q["expected"]}
+        return out
 
     def grade(self, question_id, verdict=None, answer=None, dont_know=False, confidence=None,
               thinking="", reading_thinking="") -> dict:

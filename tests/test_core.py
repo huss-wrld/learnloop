@@ -118,7 +118,7 @@ def test_grade_flags_confident_miss(store):
     core.tool_ask(store, "s1", {"prompt": "Which returns a scalar?", "options": ["a+b", "a·b"],
                                 "correct": [1], "explanation": "The dot product sums products."}, cards=False)
     out = core.tool_grade(store, "s1", {"answer": "A", "confidence": 90, "thinking": "adding"})
-    assert out["verdict"] == "wrong" and "Confident miss" in out["next"] and out["correct"] == "B) a·b"
+    assert out["verdict"] == "wrong" and "no teaching" in out["next"] and out["correct"] == "B) a·b"
 
 
 def test_phase_flow_sends_method_only_when_it_changes(store):
@@ -128,7 +128,7 @@ def test_phase_flow_sends_method_only_when_it_changes(store):
     out = core.tool_phase(store, "s1", {"phase": "plan", "plan": PLAN}, cards=False)
     assert "method" not in out and "```mermaid" in out["map"]
     out = core.tool_phase(store, "s1", {"phase": "teach"}, cards=False)
-    assert "method" not in out and out["next"] == "Teach the first node."
+    assert "method" not in out and out["next"].startswith("Teach the first node.")
 
 
 def test_recall_tool_respects_opt_in(store):
@@ -320,3 +320,17 @@ def test_guard_blocks_skill_memory_and_foreign_skills_in_lessons(store):
 def test_guard_silent_outside_lessons(store):
     assert core.guard_tool(store, "s2", "skill_manage", {}) is None
     assert core.guard_tool(store, "", "memory", {}) is None
+
+
+# ---- step down after a miss (11 Nov: LearnHarness repairs with smaller questions, not explanations) ----
+def test_teach_miss_says_step_down_not_explain(teaching):
+    teaching.ask("s1", "Which is right here?", options=["a", "b"], correct=0,
+                 explanation="Because a is right here.", qtype="check", node_id="dot")
+    out = core.tool_grade(teaching, "s1", {"answer": "B", "confidence": 90}, cards=True)
+    assert "Confident miss" in out["next"] and "Don't explain the answer" in out["next"]
+    assert "smaller question one rung below" in out["next"] and "Why toggle" in out["next"]
+
+
+def test_teach_reminder_carries_socratic_rules():
+    text = core.reminder_text("teach")
+    assert "Socratic" in text and "After a miss" in text and "never rush the repair".lower() in text.lower()
