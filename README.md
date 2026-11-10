@@ -99,6 +99,16 @@ The full list, with causes and what would change them, is in [docs/known-issues.
 - A model with shell access can go around learnloop's tools if one refuses it. learnloop's guards cover its own tools only.
 - Hermes loads plugin tools on demand, so the first call in a session may take a tool-loading step.
 
+## Compared with LearnHarness, and future work
+
+The teaching method, question types, question dock, practice doctrine, research jobs, demos and the graph's clustering follow LearnHarness. Not yet ported:
+
+- **Graph extraction.** In LearnHarness a separate pipeline writes the graph: an extractor reads the session and an auditor links each new idea to an existing one or adds it. In learnloop the teacher records facts itself with `learn_record` when a step lands, and duplicates merge only by name. Porting the extractor and auditor as background `delegate_task` jobs is the next step.
+- **Questions with no right answer** (LearnHarness's `ask_user_question`, e.g. "does this plan fit?"): learnloop asks these in plain chat.
+- **Images and files.** LearnHarness can draw visual explanations, mark up your own images with arrows and labels, and read PDFs with a dedicated reader; learnloop relies on Hermes's file tools and vision.
+- **Browsing the graph by lesson** (`list_sessions` / `list_propositions`): learnloop's teacher searches it with `learn_recall` instead.
+- **Importing notes files** into the graph (needs the extraction pipeline).
+
 ## Development
 
 ```bash

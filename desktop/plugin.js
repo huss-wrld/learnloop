@@ -450,6 +450,22 @@ function useDock() {
   useEffect(() => { const f = () => bump(n => n + 1); DOCK.listeners.add(f); return () => DOCK.listeners.delete(f) }, [])
   return DOCK
 }
+// Where the plan map shows: off by default (pane only); on adds LearnHarness's placement, beside the open question.
+const UI_KEY = 'learnloop.ui.v1'
+const UI = { prefs: (() => { try { return JSON.parse(localStorage.getItem(UI_KEY) || '{}') } catch { return {} } })(), listeners: new Set() }
+const uiGet = (k, dflt) => (k in UI.prefs ? UI.prefs[k] : dflt)
+const uiSet = patch => {
+  UI.prefs = { ...UI.prefs, ...patch }
+  try { localStorage.setItem(UI_KEY, JSON.stringify(UI.prefs)) } catch { /* storage blocked */ }
+  UI.listeners.forEach(f => f())
+}
+function useUi() {
+  const [, bump] = useState(0)
+  useEffect(() => { const f = () => bump(n => n + 1); UI.listeners.add(f); return () => UI.listeners.delete(f) }, [])
+  return uiGet
+}
+const mapInDock = () => uiGet('mapInDock', false)
+
 const dockArmed = () => !!(DOCK.q && DOCK.q.status === 'open' && !DOCK.q.submission)
 
 function makeAnswerMiddleware(ctx) {
@@ -484,8 +500,10 @@ function makeAnswerMiddleware(ctx) {
 }
 const DOCK_EMPTY = '(no thinking written)'
 
-function QuestionDock({ ctx, sid, qid }) {
+function QuestionDock({ ctx, sid, qid, plan, goal }) {
   const d = useDock()
+  useUi()
+  const [mapOpen, setMapOpen] = useState(false)
   useEffect(() => {
     let live = true
     ctx.rest(`/question/${qid}`).then(q => {
@@ -507,9 +525,8 @@ function QuestionDock({ ctx, sid, qid }) {
     const sent = sdk.host.composer.submit(sid ?? null, text.trim() ? text : DOCK_EMPTY)
     if (sent && text.trim()) sdk.host.composer.setDraft(sid ?? null, '')
   }
-  return jsxs('div', { className: 'flex flex-col gap-2 overflow-y-auto px-3 pt-3 pb-1',
-    style: { maxHeight: '45vh', background: 'var(--ui-bg-elevated, var(--ui-bg-card, var(--background)))' }, children: [
-      jsx(Style, {}, 'css'),
+  const side = plan && mapInDock()
+  const main = jsxs('div', { className: 'flex min-w-0 flex-1 flex-col gap-2', style: { display: 'flex', flexDirection: 'column', flex: '1 1 0', minWidth: 0 }, children: [
       jsx(Label, { children: kind }),
       jsx('div', { className: 'text-sm font-medium', children: jsx(Md, { text: q.prompt }) }),
       q.kind === 'mc' && jsxs('div', { className: 'flex flex-col gap-1.5', children: [
@@ -534,6 +551,15 @@ function QuestionDock({ ctx, sid, qid }) {
           q.kind === 'mc' ? 'Your thinking goes in the message box below · Enter submits' : 'Enter submits' }),
         jsx(Btn, { type: 'button', className: 'ml-auto', onClick: submit, children: 'Submit answer' })
       ] })
+    ] })
+  // LearnHarness's plan marginalia: the map beside the open question, live, without a frame of its own
+  return jsxs('div', { className: 'flex gap-3 overflow-y-auto px-3 pt-3 pb-1',
+    style: { display: 'flex', alignItems: 'flex-start', gap: 12, maxHeight: '45vh', background: 'var(--ui-bg-elevated, var(--ui-bg-card, var(--background)))' }, children: [
+      jsx(Style, {}, 'css'),
+      main,
+      side && jsx('div', { className: 'flex shrink-0 flex-col', style: { display: 'flex', flexDirection: 'column', flexShrink: 0, width: 'clamp(140px, 24%, 240px)' }, children: [
+        jsx(PlanMap, { plan, thumb: true, bare: true, onOpen: () => setMapOpen(true) }, 'm'),
+        jsx(PlanDialog, { plan, goal, open: mapOpen, onClose: () => setMapOpen(false) }, 'd')] })
     ] })
 }
 
@@ -560,7 +586,7 @@ function LearnDock({ ctx }) {
   useEffect(() => { if (DOCK.q && DOCK.sid !== sid) dockSet({ q: null }) }, [sid])
   if (!les) return null
   if (les.phase === 'practice') return jsx(PracticeDock, { ctx, sid, pr: les.practice })
-  if (les.open_question) return jsx(QuestionDock, { ctx, sid, qid: les.open_question.id }, les.open_question.id)
+  if (les.open_question) return jsx(QuestionDock, { ctx, sid, qid: les.open_question.id, plan: les.plan, goal: les.goal }, les.open_question.id)
   if (DOCK.q && DOCK.q.submission && DOCK.sid === sid) return jsx(DockResult, { q: DOCK.q })
   return null
 }
@@ -624,7 +650,7 @@ function planEdges(plan) {
   return out
 }
 
-function PlanMap({ plan, thumb = false, onOpen }) {
+function PlanMap({ plan, thumb = false, bare = false, onOpen }) {
   const L = useMemo(() => layoutPlan(plan.nodes, planEdges(plan)), [plan])
   const state = new Map(plan.nodes.map(n => [n.id, n.state]))
   const title = new Map(plan.nodes.map(n => [n.id, n.title]))
@@ -666,6 +692,12 @@ function PlanMap({ plan, thumb = false, onOpen }) {
     ]
   })
   if (!thumb) return svg
+  if (bare) {
+    return jsxs('button', { type: 'button', onClick: onOpen, title: 'Open the lesson map',
+      className: 'flex h-full flex-col gap-1 text-left opacity-80 hover:opacity-100', children: [
+        jsx('div', { style: { height: Math.min(220, Math.max(90, L.rows.length * 20)), width: '100%' }, children: svg }),
+        jsx('span', { className: 'text-xs text-(--ui-text-tertiary)', children: 'Open map' })] })
+  }
   return jsxs('button', { type: 'button', onClick: onOpen, title: 'Open the lesson map',
     className: 'flex flex-col gap-1 rounded-md border border-(--ui-stroke-secondary) px-2 py-1.5 text-left hover:border-(--ui-stroke-primary)',
     children: [jsx('div', { style: { height: Math.min(120, Math.max(48, L.rows.length * 13)), width: '100%' }, children: svg }),
@@ -710,6 +742,7 @@ function LessonPane({ ctx }) {
   const [allSteps, setAllSteps] = useState(false)
   const [allFacts, setAllFacts] = useState(false)
   const [mapOpen, setMapOpen] = useState(false)
+  useUi()
   const sid = sdk.useValue && sdk.host.state ? sdk.useValue(sdk.host.state.focusedStoredSessionId) : null
   const data = usePoll(ctx, sid ? `/lesson?session=${encodeURIComponent(sid)}` : null, 3000)
   const les = data && data.lesson
@@ -760,6 +793,12 @@ function LessonPane({ ctx }) {
           jsx('div', { style: { height: 3, borderRadius: 2, width: `${Math.round(100 * done / Math.max(1, nodes.length))}%`, background: 'var(--ui-accent)' } }) })
       ] }, 'st'))
       body.push(jsx(PlanMap, { plan, thumb: true, onOpen: () => setMapOpen(true) }, 'map'))
+      if (HAS_DOCK) {
+        body.push(jsxs('label', { className: 'flex items-center gap-2 text-xs text-(--ui-text-tertiary)', children: [
+          jsx('input', { type: 'checkbox', checked: mapInDock(), onChange: e => uiSet({ mapInDock: e.target.checked }),
+            style: { accentColor: 'var(--ui-accent)' } }),
+          'Also show the map beside questions'] }, 'mapdock'))
+      }
       body.push(jsx(PlanDialog, { plan, goal: les.goal, open: mapOpen, onClose: () => setMapOpen(false) }, 'mapd'))
       if (current) {
         body.push(jsxs('div', { className: 'flex flex-col gap-0.5', children: [
