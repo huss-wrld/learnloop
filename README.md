@@ -98,6 +98,7 @@ The full list, with causes and what would change them, is in [docs/known-issues.
 - learnloop enforces what it can in code (grade before moving on, one open question, the plan before teaching, the pause in practice), but teaching quality depends on the model.
 - A model with shell access can go around learnloop's tools if one refuses it. learnloop's guards cover its own tools only.
 - Hermes loads plugin tools on demand, so the first call in a session may take a tool-loading step.
+- Background research during a lesson is covered by unit tests (a research result is never graded as your answer) but hasn't been verified in a live lesson yet.
 
 ## Compared with LearnHarness, and future work
 
