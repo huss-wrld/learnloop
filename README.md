@@ -2,36 +2,36 @@
 
 # learnloop
 
-Structured lessons inside Hermes. learnloop finds out what you already know, plans a path from there, and teaches it one graded check at a time. What you learn lands in a knowledge graph you can see, practise from, and (if you opt in) let other chats build on.
+Ask a chat model to explain something and you'll get a good explanation. You'll nod along, and an hour later you won't be able to explain it back. learnloop turns a Hermes chat into a tutor that checks. It finds out what you already know, plans a path from there, and teaches one graded check at a time. What you learn goes into a knowledge graph you can look at and practise from.
 
-The teaching method is [LearnHarness](https://github.com/amosblomqvist/learnharness)'s, ported into Hermes as a plugin. Credit for the method belongs there; see [Credit](#credit-and-licence).
+The teaching method comes from [LearnHarness](https://github.com/amosblomqvist/learnharness); learnloop ports it into Hermes as a plugin. See [Credit](#credit-and-licence).
 
 ## What it does
 
-**Lessons** (`/learnloop:study <topic>`) run in three phases, all inside one chat:
+A lesson (`/learnloop:study <topic>`) runs in three phases, all in one chat.
 
-1. **Probe.** Graded questions that measure where your understanding of each strand of the topic starts and stops. The probe measures; it doesn't teach.
-2. **Plan.** A map of the steps from what you hold to the goal, drawn as a diagram. You approve it or ask for changes.
-3. **Teach.** Step by step: a prediction, then the step, then a check. A missed check gets a smaller question one rung below the miss, building back up until you answer the original yourself. No walls of explanation.
+1. **Probe.** A few graded questions find where your understanding of each part of the topic starts and stops. The probe only measures. It doesn't teach.
+2. **Plan.** You get a diagram of the steps from what you know to the goal. Approve it or ask for changes.
+3. **Teach.** Each step is a prediction, the step itself, then a check. Miss a check and you get a smaller question one rung down, then the next one up, until you answer the original yourself. You don't get a wall of explanation.
 
-**Think out loud.** While a question is open, the message box is your thinking: type it, or use Hermes's built-in dictation and just explain your reasoning, then pick an answer. The teacher reads the reasoning, not only the letter, and replies to where it broke ("your derivation that the variance is $d_k$ was right; where it slipped was going from variance to spread"). Every question records your answer, your confidence and your thinking. What you learn is saved as facts linked by the reasoning that connects them.
+While a question is open, the message box is for your thinking. Type it, or use Hermes's built-in dictation and talk through your reasoning, then pick an answer. The teacher reads the reasoning as well as the letter and replies to the point where it broke: "your derivation that the variance is $d_k$ was right; where it slipped was going from variance to spread." Each question keeps your answer, your confidence and your thinking, and what you learn is saved as facts linked by the reasoning between them.
 
-**Practice** (`/learnloop:practice <topic>`) exercises what's already in your graph. One problem at a time, posed with a committed model solution; hints come one rung at a time (from "re-read the second given" up to a worked step), and the solution is revealed only when the problem is concluded. Between problems the session pauses so you can ask about the last one; the next comes when you ask for it.
+Practice (`/learnloop:practice <topic>`) works on what's already in your graph. You get one problem at a time, and the model commits to its own solution before you start. Hints come one rung at a time, from "re-read the second given" up to a worked step, and you only see the solution once the problem is concluded. After each problem the session waits, so you can ask about it; the next one comes when you ask.
 
-**The knowledge graph** is every fact you've learned, linked premise to conclusion. In Hermes Desktop it's a live, draggable graph on the Learn page, with adjustable physics, search, and "Practise this" on any fact.
+The knowledge graph holds every fact you've learned, each linked to the facts it was built from. In Hermes Desktop it's a live graph on the Learn page. You can drag it, search it, tune its physics, and click any fact to practise it.
 
-**Recall** (off by default) lets other chats use up to 6 relevant facts from your graph, and says so when it does.
+Recall is experimental and off by default. When it's on, other chats can use up to 6 relevant facts from your graph and say so when they do.
 
 ## Install
 
 ```bash
-hermes plugins install learnloop          # once it's listed in the catalog
-hermes plugins install huss-wrld/learnloop      # straight from GitHub
+hermes plugins install learnloop               # once it's listed in the catalog
+hermes plugins install huss-wrld/learnloop     # straight from GitHub
 ```
 
-Then, in Hermes Desktop, enable learnloop's Desktop part: **Capabilities → Plugins → learnloop → enable**, then **Rescan**. Each profile has its own switch. Without the Desktop part learnloop still works, with questions and problems as text.
+Then turn on learnloop's Desktop part in Hermes Desktop: **Capabilities → Plugins → learnloop → enable**, then **Rescan**. Each profile has its own switch. Without the Desktop part learnloop still works, but questions and problems come as text.
 
-Requires Hermes 0.23.0 or later. No API keys, no Python dependencies.
+You need Hermes 0.23.0 or later. learnloop needs no API keys and has no Python dependencies.
 
 ## Use
 
@@ -40,32 +40,35 @@ Requires Hermes 0.23.0 or later. No API keys, no Python dependencies.
 | `/learnloop:study <topic>` | Start a lesson in this chat |
 | `/learnloop:practice <topic>` | Start a practice session in this chat |
 | `/learnloop stop` | End the current lesson or practice session |
-| `/learnloop status` | This chat's lesson and your graph's size |
-| `/learnloop map` | The lesson plan with your position |
+| `/learnloop status` | This chat's lesson and the size of your graph |
+| `/learnloop map` | The lesson plan, with where you are |
 | `/learnloop graph [words]` | Search what you've learned |
 | `/learnloop recall on\|off` | Let other chats use your graph (off by default) |
 | `/learnloop cards on\|off` | Answer cards in Desktop (on by default) |
 | `/learnloop import <dir>` | Import a LearnHarness knowledge graph, e.g. `~/.config/LearnHarness/data` |
 
-On Telegram and other messaging platforms, plugin skills aren't available, so start with `/learnloop <topic>` or `/learnloop practice <topic>` instead.
+Telegram and the other messaging platforms don't have plugin skills, so start there with `/learnloop <topic>` or `/learnloop practice <topic>`.
 
-learnloop is inert until you start something: no lesson, no effect on the chat (unless you turned recall on).
+Until you start a lesson or practice session, learnloop stays out of the chat. The one exception is recall, if you turn it on.
 
 ## In Hermes Desktop
 
-- **Question dock.** As in LearnHarness, the open question sits on the message box: pick an option (or *I don't know*) and a confidence above it, type your thinking in the box, press Enter. The chat keeps a card for each question; after you answer it shows the verdict and the correct option, with the explanation behind a *Why* toggle. While a question is open, what you type is your answer (slash commands still work).
-- **Lesson pane** on the right of the chat: phase, progress, the live plan map, the open question, the facts learned so far. In a practice chat: the problems and their outcomes.
-- **Learn page** in the sidebar: start a lesson or practice session, reopen past ones, and explore your knowledge graph.
-- **Practice dock.** While a problem is open it sits above the message box; what you type is your thinking. Hint and Set aside are one click; so is Next problem.
+The open question sits on top of the message box, as in LearnHarness. Pick an option (or *I don't know*) and a confidence, type your thinking in the box, and press Enter. The chat keeps a card for every question; once you've answered, it shows the verdict and the right option, with the explanation behind a *Why* toggle. While a question is open, whatever you type counts as your answer, though slash commands still work.
+
+The lesson pane on the right shows the phase, your progress, a small plan map that opens the full map, and the facts you've learned so far. In a practice chat it lists the problems and how each one went.
+
+The Learn page in the sidebar is where you start lessons and practice, reopen old ones, and explore your graph.
+
+During practice the open problem sits above the message box, and what you type is your thinking. Hint, Set aside and Next problem are one click each.
 
 ## Models
 
-The method asks a lot of the model: restraint during the probe, small questions instead of explanations, tool calls instead of typed questions. Tested so far:
+The method is hard on the model. It has to hold back during the probe, ask small questions instead of explaining, and ask through the tools instead of typing questions out. I've tested two so far:
 
-- **Claude Opus 5.5** (medium reasoning): followed the method closely. A 15-turn lesson had no hand-typed questions, no tool errors, and stepped down to smaller questions after misses.
-- **DeepSeek V4.1 Flash**: practice sessions ran cleanly. In lessons it sometimes typed a question by hand instead of using the tool (learnloop detects this and corrects course on the next turn).
+- **Claude Opus 5.5** (medium reasoning) followed the method closely. A 15-turn lesson had no hand-typed questions and no tool errors, and it stepped down to smaller questions after misses.
+- **DeepSeek V4.1 Flash** ran practice sessions cleanly. In lessons it sometimes typed a question out instead of using the tool; learnloop notices and corrects it on the next turn.
 
-**Model roles.** LearnHarness runs three model slots: a strong model teaches, a cheap one runs research and other background jobs, a vision one reads images and PDFs. In Hermes those are settings you already have, and learnloop doesn't change your config:
+LearnHarness runs three models: a strong one teaches, a cheap one does research and other background jobs, and a vision model reads images and PDFs. Hermes already has a setting for each, and learnloop leaves your config alone:
 
 | Role | Hermes setting |
 |---|---|
@@ -73,44 +76,45 @@ The method asks a lot of the model: restraint during the probe, small questions 
 | Background research (`delegate_task`) | `delegation.model` / `delegation.provider` (defaults to the chat's model) |
 | Images and figures | `auxiliary.vision` |
 
-The teacher verifies facts it isn't sure of by dispatching research in the background and keeps teaching; the brief comes back into the chat with its sources.
+When the teacher isn't sure of a fact, it sends research off in the background and keeps teaching. The brief comes back into the chat with its sources.
 
-Stronger models make better teachers. In these tests a lesson turn sent about 110k to 125k input tokens and a practice turn about 32k, most of it cached.
+A stronger model teaches better. In my tests a lesson turn sent about 110k to 125k input tokens and a practice turn about 32k, most of it cached.
 
 ## What learnloop touches
 
-So you know before installing:
+learnloop keeps one SQLite database per profile in Hermes's plugin storage, at `<hermes home>/plugin-data/learnloop/learnloop.db`. Graph layout and physics settings live in Desktop's local storage.
 
-- **Storage.** One SQLite database in Hermes's plugin storage (`<hermes home>/plugin-data/learnloop/learnloop.db`), per profile. Graph layout and physics settings are kept in Desktop's local storage.
-- **Network.** None. learnloop makes no network calls of its own.
-- **Shell.** None. learnloop runs no commands.
-- **Reads outside its own data.** The folder you pass to `/learnloop import` (read-only), and Hermes's session database (read-only) to follow a lesson across context compression, which gives the chat a new session id.
-- **Hooks.**
-  - `pre_llm_call` adds learnloop's per-turn notes (phase, open question, method reminders) during lessons and practice; with recall on, up to 6 matching facts in other chats.
-  - `pre_tool_call` blocks `skill_manage`, `memory`, and loading other skills *during an active lesson only*, so Hermes's background review can't turn a lesson into a competing teaching skill. It fails open.
-  - `transform_llm_output` removes a question the model printed twice.
-  - `on_session_delete` ends a lesson whose chat was deleted.
-- **Background research.** During lessons the method tells the model to verify uncertain facts with Hermes's own `delegate_task` (a background sub-agent that uses your configured web tools). learnloop makes no calls itself; its hook marks the returning brief so it's never graded as your answer.
-- **Tools.** `learn_ask`, `learn_grade`, `learn_phase`, `learn_method`, `learn_record`, `learn_recall`, `learn_problem`, `learn_conclude`. All but `learn_recall` refuse to act outside a lesson or practice session.
+It makes no network calls of its own and runs no shell commands. It reads two things outside its own data, both read-only: the folder you give `/learnloop import`, and Hermes's session database, which it uses to follow a lesson when context compression gives the chat a new session id.
+
+It registers four hooks:
+
+- `pre_llm_call` adds learnloop's notes for the turn (phase, open question, method reminders) during lessons and practice. With recall on, it adds up to 6 matching facts in other chats.
+- `pre_tool_call` blocks `skill_manage`, `memory` and loading other skills, but only during an active lesson. That stops Hermes's background review from turning a lesson into a competing teaching skill. If the hook fails, the call goes through.
+- `transform_llm_output` removes a question the model printed twice.
+- `on_session_delete` ends a lesson when its chat is deleted.
+
+During lessons the method tells the model to check uncertain facts with Hermes's own `delegate_task`, a background sub-agent that uses your web tools. learnloop makes no calls itself. Its hook marks the brief when it comes back so it's never graded as your answer.
+
+Its tools are `learn_ask`, `learn_grade`, `learn_phase`, `learn_method`, `learn_record`, `learn_recall`, `learn_problem` and `learn_conclude`. Every one except `learn_recall` refuses to act outside a lesson or practice session.
 
 ## Known limits
 
-The full list, with causes and what would change them, is in [docs/known-issues.md](docs/known-issues.md). The ones you'd notice:
+[docs/known-issues.md](docs/known-issues.md) has the full list, with causes and what would fix them. The ones you're likely to notice:
 
-- learnloop enforces what it can in code (grade before moving on, one open question, the plan before teaching, the pause in practice), but teaching quality depends on the model.
-- A model with shell access can go around learnloop's tools if one refuses it. learnloop's guards cover its own tools only.
-- Hermes loads plugin tools on demand, so the first call in a session may take a tool-loading step.
-- Background research during a lesson is covered by unit tests (a research result is never graded as your answer) but hasn't been verified in a live lesson yet.
+- learnloop enforces what it can in code: grading before moving on, one open question at a time, the plan before teaching, the pause in practice. How well it teaches still depends on the model.
+- A model with shell access can work around a learnloop tool that refuses it. learnloop's guards only cover its own tools.
+- Hermes loads plugin tools on demand, so the first call in a session may take an extra step.
+- Unit tests cover background research during a lesson (a research result is never graded as your answer), but I haven't checked it in a live lesson yet.
 
-## Compared with LearnHarness, and future work
+## Compared with LearnHarness, and what's next
 
-The teaching method, question types, question dock, practice doctrine, research jobs, demos and the graph's clustering follow LearnHarness. Not yet ported:
+The teaching method, question types, question dock, practice doctrine, research jobs, demos and graph clustering all follow LearnHarness. These parts aren't ported yet:
 
-- **Graph extraction.** In LearnHarness a separate pipeline writes the graph: an extractor reads the session and an auditor links each new idea to an existing one or adds it. In learnloop the teacher records facts itself with `learn_record` when a step lands, and duplicates merge only by name. Porting the extractor and auditor as background `delegate_task` jobs is the next step.
-- **Questions with no right answer** (LearnHarness's `ask_user_question`, e.g. "does this plan fit?"): learnloop asks these in plain chat.
-- **Images and files.** LearnHarness can draw visual explanations, mark up your own images with arrows and labels, and read PDFs with a dedicated reader; learnloop relies on Hermes's file tools and vision.
-- **Browsing the graph by lesson** (`list_sessions` / `list_propositions`): learnloop's teacher searches it with `learn_recall` instead.
-- **Importing notes files** into the graph (needs the extraction pipeline).
+- **Graph extraction.** In LearnHarness a separate pipeline writes the graph: an extractor reads the session, and an auditor links each new idea to an existing one or adds it. In learnloop the teacher records facts itself with `learn_record` when a step lands, and duplicates only merge if they share a name. Porting the extractor and auditor as background `delegate_task` jobs is next.
+- **Questions with no right answer**, like "does this plan fit?" (LearnHarness's `ask_user_question`). learnloop asks these in plain chat.
+- **Images and files.** LearnHarness can draw explanations, mark up your images with arrows and labels, and read PDFs with its own reader. learnloop uses Hermes's file tools and vision instead.
+- **Browsing the graph by lesson** (`list_sessions` / `list_propositions`). learnloop's teacher searches it with `learn_recall` instead.
+- **Importing notes files** into the graph. This needs the extraction pipeline first.
 
 ## Development
 
@@ -120,11 +124,11 @@ hermes plugins validate .                           # catalog checks
 python3 tools/build_skill.py                        # regenerate skills/ after editing method/
 ```
 
-`tools/` and `tests/` are development aids; Hermes never loads them. `tools/drive.py` runs scripted headless lessons (`hermes chat` sessions) in a throwaway test profile you name with `DRIVE_PROFILE`, under that profile's own approval settings, and `tools/scorecard.py` scores them (questions typed by hand, grading order, teaching during the probe, the practice pause, tokens). The research behind the port is in [docs/research](docs/research).
+Hermes never loads `tools/` or `tests/`. `tools/drive.py` runs scripted lessons headlessly (`hermes chat` sessions) in a throwaway test profile you name with `DRIVE_PROFILE`, under that profile's own approval settings. `tools/scorecard.py` scores the runs: hand-typed questions, grading order, teaching during the probe, the practice pause, and token use. The research behind the port is in [docs/research](docs/research).
 
 ## Credit and licence
 
-The teaching and practice method in `method/` is adapted from **LearnHarness**, Copyright (C) the LearnHarness authors, at commit `713377f366771e3e4730e6acd1bc290e0ebc6d6e`, under AGPL-3.0. Each adapted file names its sources and the changes in its header; the practice doctrine is verbatim. The verbatim originals are in `docs/research/method-raw/`. See [NOTICE](NOTICE).
+The teaching and practice method in `method/` is adapted from **LearnHarness**, Copyright (C) the LearnHarness authors, at commit `713377f366771e3e4730e6acd1bc290e0ebc6d6e`, under AGPL-3.0. Each adapted file's header names its sources and what changed. The practice doctrine is verbatim. The verbatim originals are in `docs/research/method-raw/`. See [NOTICE](NOTICE).
 
 All Python and JavaScript in this repository is original to learnloop.
 
