@@ -197,13 +197,46 @@ def cards_enabled(store: Store, platform: str) -> bool:
 ASK_NEXT = "Create the next question with learn_ask; never type a question yourself."
 
 
+_TEX = [(r"\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}", r"\1/\2"), (r"\\sqrt\{([^{}]*)\}", r"√\1"), (r"\\sqrt\s*([A-Za-z0-9_]+)", r"√\1"), (r"\\cdot", "·"), (r"\\times", "×"),
+        (r"\\le(q)?\b", "≤"), (r"\\ge(q)?\b", "≥"), (r"\\approx", "≈"), (r"\\pm", "±"), (r"\\infty", "∞"),
+        (r"\\(mathrm|mathbf|text|operatorname)\{([^{}]*)\}", r"\2"), (r"\\([A-Za-z]+)", r"\1"),
+        (r"\^\{?2\}?", "²"), (r"\^\{?3\}?", "³"), (r"[{}]", "")]
+
+
+def clip_markdown(text: str, limit: int) -> str:
+    """Shorten Markdown+LaTeX for a preview without cutting inside a formula or a word.
+
+    A plain [:limit] cut can end inside `$...$`, which the renderer then shows as stray glyphs; this cuts at the
+    last space before the limit, then drops an unclosed formula, then adds an ellipsis."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if " " in cut:
+        cut = cut[:cut.rindex(" ")]
+    if cut.count("$") % 2:
+        cut = cut[:cut.rindex("$")].rstrip()
+    return cut.rstrip(" ,;:.") + "…"
+
+
+def plain_math(text: str) -> str:
+    """Option text for the learner's own chat line: Desktop shows user messages as plain text, so `$d_k$`
+    would appear with its dollar signs. Inline LaTeX becomes readable plain text ("√d_k", "d_k²")."""
+    def conv(m):
+        t = m.group(1)
+        for pat, rep in _TEX:
+            t = re.sub(pat, rep, t)
+        return t.strip()
+    return re.sub(r"\$\$?([^$]+?)\$\$?", conv, text)
+
+
 def card_answer_line(q: dict) -> str:
     """The chat message a card sends after submitting: readable for the learner, a nudge for the model."""
     sub = q["submission"] or {}
     if sub.get("dont_know"):
         head = "I don't know"
     elif q["options"]:
-        head = ", ".join(f"{LETTERS[i]}) {q['options'][i]}" for i in sub.get("choices", []))
+        head = ", ".join(f"{LETTERS[i]}) {plain_math(q['options'][i])}" for i in sub.get("choices", []))
     else:
         head = sub.get("text", "")
     parts = [head[:600]]
@@ -407,7 +440,7 @@ def lesson_view(store: Store, session_id: str) -> dict:
             "problems": [{"id": p["id"], "mode": p["mode"], "status": p["status"], "outcome": p["outcome"],
                           "label": OUTCOME_LABEL.get(p["outcome"] or "", "Working on it" if p["status"] == "open"
                                                      else p["status"].capitalize()),
-                          "retest": p["retest"], "statement": p["statement"][:160]} for p in probs]}
+                          "retest": p["retest"], "statement": clip_markdown(p["statement"], 160)} for p in probs]}
     if les["plan"]:
         st = store.plan_status(les["id"])
         done = set(st["visited"]) - {st["current"]}

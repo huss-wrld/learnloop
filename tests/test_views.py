@@ -48,3 +48,12 @@ def test_lessons_overview_and_graph(store):
     assert o["lessons"][1]["facts"] == 1 and o["stats"]["propositions"] == 1
     g = store.graph()
     assert g["propositions"][0]["name"] == "Dot product scalar"
+
+
+def test_problem_preview_never_cuts_inside_a_formula():
+    from learnloop.core import clip_markdown
+    long = "A colleague's attention code computed, for one query, the scores $s = (2, 0, 0)$ against three keys, " \
+           "and got the weights $\\approx (0.787, 0.107, 0.107)$. For a different query the scores are $s' = (1007, 1005, 1005)$."
+    out = clip_markdown(long, 160)
+    assert out.endswith("…") and out.count("$") % 2 == 0 and len(out) <= 161
+    assert clip_markdown("short $x$", 160) == "short $x$"

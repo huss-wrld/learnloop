@@ -113,3 +113,14 @@ def test_map_is_mermaid_even_with_cards(store):
     out = core.tool_phase(store, "s1", {"phase": "plan", "assessment": "Dot: holds it fine",
                                         "plan": "graph TD\n  a[A] --> b[B]"}, cards=True)
     assert out["map"].startswith("```mermaid") and "::learnloop-map" not in out["map"]
+
+
+def test_answer_line_shows_maths_as_plain_text():
+    """Desktop renders the learner's own message as plain text, so `$d_k$` must not appear with its dollars."""
+    from learnloop.core import card_answer_line, plain_math
+    q = {"options": ["It grows like $\\sqrt{d_k}$", "It grows like $d_k$"], "submission": {"choices": [1], "confidence": 70,
+         "thinking": "the spread is d_k"}}
+    assert card_answer_line(q) == "B) It grows like d_k · confidence 70% · thinking: the spread is d_k"
+    assert plain_math("$c = d_k^2$") == "c = d_k²" and plain_math("$\\sqrt{d_k}$") == "√d_k"
+    assert plain_math("costs 5$ flat") == "costs 5$ flat"
+    assert plain_math("$\\dfrac{1}{d_k}$") == "1/d_k" and plain_math("$\\frac{V}{c^2}$") == "V/c²"

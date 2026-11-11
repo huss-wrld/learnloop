@@ -250,3 +250,51 @@ Three halves, three reloads:
 **Mitigation.** Desktop focuses the chat you type in, so this needs an unusual layout. Slash commands always pass through.
 
 **Revisit when.** Hermes passes the session to composer middleware.
+
+---
+
+## KI-21. A card that loaded could show "wasn't created properly" (Fixed)
+
+**What happened.** In a webapp lesson (11 Nov, Opus 5.5), the chat card for an answered question switched to "This question wasn't created properly" while the model was replying. After a page reload both card requests returned 200 and the card rendered normally.
+
+**Cause.** The card polls its question every few seconds. One failed request (the plugin host busy during the model's turn) set the card's error, and the error was never cleared, so a real question was shown as malformed.
+
+**Fix.** Question and problem cards keep showing what they loaded; only three failures in a row on a card that never loaded show the error, and a first load that fails is retried.
+
+---
+
+## KI-22. The dock stayed on "waiting for the verdict" after a free-text answer (Fixed)
+
+**What happened.** Recording the demo (11 Nov, Opus 5.5), a written answer was graded "partial" in the database, but the dock kept showing "Answer sent: waiting for the verdict." until the page was reloaded.
+
+**Cause.** The dock shows the last answer's result from its own store. Multiple choice is graded on submit, so the store already had the verdict; a free answer is graded later by the model, and nothing refreshed the store.
+
+**Fix.** While the dock shows a result without a verdict, it fetches the question every 3 s (up to 3 minutes) and shows the verdict as soon as it lands.
+
+---
+
+## KI-23. The lesson map dialog cut off steps at the right edge (Fixed)
+
+**What happened.** On a 10-step plan in a 1500 px window with the lesson pane open, the map dialog clipped the rightmost step.
+
+**Cause.** The full map was drawn at its natural pixel width inside a dialog capped at 86vw, so a wide plan overflowed.
+
+**Fix.** The map area has a set width (820 px, or 80vw on small windows) and the map scales down to fit it, never past its natural size.
+
+---
+
+## KI-24. Graph region labels could overlap when zoomed out (Fixed)
+
+**What happened.** On the Learn page, with several lessons and an imported group, two region labels were drawn on top of each other.
+
+**Cause.** Labels are drawn at screen size above each region, so a fitted (zoomed-out) graph puts them closer than their text is wide; and regions were sized without regard to their label's width.
+
+**Fix.** Regions are at least as wide as their label. Labels are placed biggest region first; a label that would overlap another moves up a line or below its region.
+
+---
+
+## KI-25. Fractions showed as raw LaTeX in the learner's answer line (Fixed)
+
+**What happened.** An option such as `$\dfrac{V}{c^2}$` appeared in the learner's own chat line as `\dfrac{V}{c^2}`; Desktop shows user messages as plain text.
+
+**Fix.** `plain_math()` turns `\frac` / `\dfrac` / `\tfrac` into `a/b`, along with the roots, powers and symbols it already handled.

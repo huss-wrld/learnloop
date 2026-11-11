@@ -115,6 +115,7 @@ function Result({ q }) {
 function QuestionCard({ ctx, id, sessionId }) {
   const [q, setQ] = useState(null)
   const [error, setError] = useState('')
+  const fails = useRef(0)
   const [choices, setChoices] = useState([])
   const [text, setText] = useState('')
   const [confidence, setConfidence] = useState('')
@@ -123,9 +124,16 @@ function QuestionCard({ ctx, id, sessionId }) {
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
-    ctx.rest(`/question/${id}`).then(setQ, e => setError(String(e && e.message ? e.message : e)))
+    ctx.rest(`/question/${id}`).then(v => { fails.current = 0; setError(''); setQ(v) },
+      e => { if (++fails.current >= 3) setError(String(e && e.message ? e.message : e)) })
   }, [ctx, id])
   useEffect(load, [load])
+  // a first load that failed is retried (three failures in a row show the error)
+  useEffect(() => {
+    if (q || error) return undefined
+    const t = setInterval(load, 2000)
+    return () => clearInterval(t)
+  }, [q, error, load])
   // Answered in the dock: take its result the moment it's submitted (multiple choice is graded on submit).
   useEffect(() => {
     const f = () => { if (DOCK.q && DOCK.q.id === id && DOCK.q.submission) setQ(DOCK.q) }
@@ -162,7 +170,7 @@ function QuestionCard({ ctx, id, sessionId }) {
     children: [jsx(Style, {}, 'css'), ...(Array.isArray(children) ? children : [children])]
   })
 
-  if (!QID.test(id || '') || error) {
+  if (!QID.test(id || '') || (error && !q)) {
     return shell(jsx('div', { className: 'text-sm text-(--ui-text-tertiary)',
       children: "This question wasn't created properly, so it can't be answered here. Ask for it again in the chat." }))
   }
@@ -232,12 +240,19 @@ const OUTCOME = {
 function ProblemCard({ ctx, id, sessionId }) {
   const [p, setP] = useState(null)
   const [error, setError] = useState('')
+  const fails = useRef(0)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const load = useCallback(() => {
-    ctx.rest(`/problem/${id}`).then(setP, e => setError(String(e && e.message ? e.message : e)))
+    ctx.rest(`/problem/${id}`).then(v => { fails.current = 0; setError(''); setP(v) },
+      e => { if (++fails.current >= 3) setError(String(e && e.message ? e.message : e)) })
   }, [ctx, id])
   useEffect(load, [load])
+  useEffect(() => {
+    if (p || error) return undefined
+    const t = setInterval(load, 2000)
+    return () => clearInterval(t)
+  }, [p, error, load])
   // Follow the conclusion and the pause: poll while this card can still change.
   const live = p && (p.status === 'open' || (p.latest && p.lesson_open))
   useEffect(() => {
@@ -271,7 +286,7 @@ function ProblemCard({ ctx, id, sessionId }) {
     'data-slot': 'learnloop-problem',
     children: [jsx(Style, {}, 'css'), ...(Array.isArray(children) ? children : [children])]
   })
-  if (!PID.test(id || '') || error) {
+  if (!PID.test(id || '') || (error && !p)) {
     return shell(jsx('div', { className: 'text-sm text-(--ui-text-tertiary)',
       children: "This problem wasn't created properly, so it can't be worked here. Ask for it again in the chat." }))
   }
@@ -564,7 +579,19 @@ function QuestionDock({ ctx, sid, qid, plan, goal }) {
 }
 
 // The verdict, right at the input, until the next question arrives (the chat's card keeps the full record).
-function DockResult({ q }) {
+function DockResult({ ctx, q }) {
+  // a free answer is graded by the model after it's sent: fetch the verdict until it lands
+  useEffect(() => {
+    if (q.result || !ctx) return undefined
+    let n = 0
+    const t = setInterval(() => {
+      if (++n > 60) { clearInterval(t); return }
+      ctx.rest(`/question/${q.id}`).then(v => {
+        if (v && v.result && DOCK.q && DOCK.q.id === q.id) dockSet({ q: v })
+      }, () => {})
+    }, 3000)
+    return () => clearInterval(t)
+  }, [ctx, q.id, q.result])
   const r = q.result
   const v = r ? (VERDICT[r.verdict] || VERDICT.wrong) : null
   const right = r && r.correct ? r.correct.map(i => `${LETTERS[i]}) ${q.options[i]}`).join(', ') : ''
@@ -587,7 +614,7 @@ function LearnDock({ ctx }) {
   if (!les) return null
   if (les.phase === 'practice') return jsx(PracticeDock, { ctx, sid, pr: les.practice })
   if (les.open_question) return jsx(QuestionDock, { ctx, sid, qid: les.open_question.id, plan: les.plan, goal: les.goal }, les.open_question.id)
-  if (DOCK.q && DOCK.q.submission && DOCK.sid === sid) return jsx(DockResult, { q: DOCK.q })
+  if (DOCK.q && DOCK.q.submission && DOCK.sid === sid) return jsx(DockResult, { ctx, q: DOCK.q })
   return null
 }
 
@@ -671,8 +698,10 @@ function PlanMap({ plan, thumb = false, bare = false, onOpen }) {
   const pad = thumb ? 2 : 6
   const svg = jsxs('svg', {
     viewBox: `${-pad} ${-pad} ${width + 2 * pad} ${height + 2 * pad}`,
-    width: thumb ? '100%' : width + 2 * pad, height: thumb ? '100%' : height + 2 * pad,
-    preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'Lesson map', style: { display: 'block' },
+    // the full map shrinks to the width it's given (a dialog or a narrow page), never grows past its natural size
+    width: '100%', height: thumb ? '100%' : 'auto',
+    preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'Lesson map',
+    style: thumb ? { display: 'block' } : { display: 'block', maxWidth: width + 2 * pad, margin: '0 auto' },
     children: [
       ...L.edges.map(([a, b]) => { const p = P.get(a), q = P.get(b)
         const x1 = p.x + W / 2, y1 = p.y + p.h, x2 = q.x + W / 2, y2 = q.y, my = (y1 + y2) / 2
@@ -725,7 +754,7 @@ function PlanDialog({ plan, goal, open, onClose }) {
   if (!open || !plan) return null
   const body = jsxs('div', { className: 'flex flex-col gap-3', style: { minWidth: 360 }, children: [
     jsx(PlanLegend, { plan }),
-    jsx('div', { style: { maxHeight: '72vh', maxWidth: '86vw', overflow: 'auto' }, children: jsx(PlanMap, { plan }) })] })
+    jsx('div', { style: { maxHeight: '72vh', width: 'min(820px, 80vw)', maxWidth: '100%', overflowY: 'auto' }, children: jsx(PlanMap, { plan }) })] })
   if (sdk.Dialog && sdk.DialogContent) {
     const Title = sdk.DialogTitle || 'div', Header = sdk.DialogHeader || 'div'
     return jsx(sdk.Dialog, { open: true, onOpenChange: v => { if (!v) onClose() }, children: jsxs(sdk.DialogContent, { fitContent: true, children: [
@@ -979,7 +1008,8 @@ export function groupAnchors(seed, P) {
   if (G <= 1) return { ax, ay, local }
   const along = g => P.depthMode === 'off' ? 0 : span[g] * P.depthSpacing          // extent on the depth axis
   const across = g => Math.sqrt(cnt[g]) * (P.linkDistance + 30)                     // rough spread across it
-  const size = g => Math.max(along(g), across(g), 220)  // never narrower than its label
+  const labelW = g => Math.min(48, String(seed.groups[g]).length) * 7.5 + 40          // 13px semibold, about 7.5px a character
+  const size = g => Math.max(along(g), across(g), 220, labelW(g))  // never narrower than its label
   const order = [...Array(G).keys()].filter(g => cnt[g]).sort((a, b) => cnt[b] - cnt[a])
   const total = order.reduce((s, g) => s + (size(g) + P.groupSpacing) ** 2, 0)
   const rowMax = Math.max(size(order[0]) + P.groupSpacing, Math.sqrt(total) * 1.4)
@@ -1283,14 +1313,24 @@ function GraphView({ graph, height = 600, onOpenLesson, onPractice }) {
       ctx.globalAlpha = 0.85
       ctx.font = `600 13px ${font}`
       ctx.textAlign = 'center'
-      L.groups.forEach((g, k) => {
-        let mx = 0, my = Infinity, c = 0
-        for (let i = 0; i < props.length; i++) if (L.gi[i] === k) { mx += sx(i); my = Math.min(my, sy(i)); c++ }
+      // labels are screen-sized, so a zoomed-out graph can stack them: the biggest region keeps its place,
+      // a later label that would overlap moves up a line, or below its region
+      const boxes = []
+      const hits = (x, y, half) => boxes.some(b => Math.abs(b.x - x) < b.half + half && Math.abs(b.y - y) < 17)
+      const sizes = L.groups.map((_, k) => props.reduce((n, p, i) => n + (L.gi[i] === k ? 1 : 0), 0))
+      ;[...L.groups.keys()].sort((a, b) => sizes[b] - sizes[a]).forEach(k => {
+        const g = L.groups[k]
+        let mx = 0, my = Infinity, ny = -Infinity, c = 0
+        for (let i = 0; i < props.length; i++) if (L.gi[i] === k) { mx += sx(i); my = Math.min(my, sy(i)); ny = Math.max(ny, sy(i)); c++ }
         if (!c) return
         ctx.fillStyle = `hsl(${HUES[k % HUES.length]}, 60%, 70%)`
         const text = String(g).length > 48 ? String(g).slice(0, 47) + '…' : String(g)
         const half = ctx.measureText(text).width / 2 + 8
-        ctx.fillText(text, Math.max(half, Math.min(v.w - half, mx / c)), Math.max(16, my - 22))
+        const x = Math.max(half, Math.min(v.w - half, mx / c))
+        const tries = [my - 22, my - 40, my - 58, ny + 28, ny + 46].map(y => Math.max(16, Math.min(v.h - 6, y)))
+        const y = tries.find(t => !hits(x, t, half)) ?? tries[0]
+        boxes.push({ x, y, half })
+        ctx.fillText(text, x, y)
       })
       ctx.textAlign = 'start'
     }
