@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/banner.png" alt="learnloop: learning that checks itself" width="720"></p>
+
 # learnloop
 
 Structured lessons inside Hermes. learnloop finds out what you already know, plans a path from there, and teaches it one graded check at a time. What you learn lands in a knowledge graph you can see, practise from, and (if you opt in) let other chats build on.
@@ -12,7 +14,7 @@ The teaching method is [LearnHarness](https://github.com/amosblomqvist/learnharn
 2. **Plan.** A map of the steps from what you hold to the goal, drawn as a diagram. You approve it or ask for changes.
 3. **Teach.** Step by step: a prediction, then the step, then a check. A missed check gets a smaller question one rung below the miss, building back up until you answer the original yourself. No walls of explanation.
 
-Every question records your answer, your confidence and your thinking. What you learn is saved as facts linked by the reasoning that connects them.
+**Think out loud.** While a question is open, the message box is your thinking: type it, or use Hermes's built-in dictation and just explain your reasoning, then pick an answer. The teacher reads the reasoning, not only the letter, and replies to where it broke ("your derivation that the variance is $d_k$ was right; where it slipped was going from variance to spread"). Every question records your answer, your confidence and your thinking. What you learn is saved as facts linked by the reasoning that connects them.
 
 **Practice** (`/learnloop:practice <topic>`) exercises what's already in your graph. One problem at a time, posed with a committed model solution; hints come one rung at a time (from "re-read the second given" up to a worked step), and the solution is revealed only when the problem is concluded. Between problems the session pauses so you can ask about the last one; the next comes when you ask for it.
 
